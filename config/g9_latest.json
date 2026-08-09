@@ -1,0 +1,8 @@
+{
+  "mode": "single-local",
+  "recall": 0.333,
+  "false_positive_rate": 0.143,
+  "measured_at": "2026-08-10",
+  "goldset": "config/goldset.toml",
+  "note": "ledger N-10適用後の実測。既定モード（batch_matching=false・dev_local_only=true）での値。承認UIの常時表示に使う（design.md G9-b）"
+}

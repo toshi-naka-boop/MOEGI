@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from moegi import store
+from moegi import pipeline, store
+from moegi.ingest import Section
 
 
 class StoreTest(unittest.TestCase):
@@ -142,6 +143,83 @@ class StoreTest(unittest.TestCase):
         self.addCleanup(reconnected.close)
         columns = {row[1] for row in reconnected.execute("PRAGMA table_info(cost_records)")}
         self.assertIn("timeout", columns)
+
+
+class SavePipelineResultTest(unittest.TestCase):
+    """design.md §6.4・D4「承認UI」向けのChange/Impact/Proposal永続化。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.conn = store.connect(Path(self.tmpdir.name) / "test.db")
+        self.addCleanup(self.conn.close)
+        self.run_id = store.new_run_id()
+
+    def _sample_result(self) -> dict:
+        change = pipeline.Change(
+            id="c",
+            old_section=None,
+            new_section=Section(notice_id="n", path="第4の4", text="評価を行うこと。", offset=0),
+            kind="追加",
+            summary="評価の記録が新設された",
+        )
+        impact = pipeline.Impact(
+            id="impact-c-new",
+            change_id="c",
+            sitedoc_item_id=None,
+            verdict="要更新",
+            rationale="評価を記録する項目が無い",
+            confidence=0.9,
+            evidence=[pipeline.Evidence(notice_section_path="第4の4", quote="評価を行うこと。", offset=0)],
+        )
+        proposal = pipeline.Proposal(
+            id="proposal-impact-c-new", impact_id="impact-c-new", before="", after="評価欄を新設する。"
+        )
+        return {"changes": [change], "requirements": [], "impacts": [impact], "proposals": [proposal]}
+
+    def test_save_and_list_for_review(self):
+        store.save_pipeline_result(self.conn, self.run_id, self._sample_result())
+        rows = store.list_proposals_for_review(self.conn, self.run_id)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["after"], "評価欄を新設する。")
+        self.assertEqual(row["status"], "未承認")
+        self.assertEqual(row["verdict"], "要更新")
+        self.assertEqual(row["change_label"], "c")
+        self.assertEqual(row["change_kind"], "追加")
+        self.assertEqual(row["evidence_quote"], "評価を行うこと。")
+        self.assertEqual(row["new_text"], "評価を行うこと。")
+        self.assertIsNone(row["old_text"])  # 完全新設
+
+    def test_list_for_review_scopes_by_run_id(self):
+        store.save_pipeline_result(self.conn, self.run_id, self._sample_result())
+        other_run = store.new_run_id()
+        self.assertEqual(store.list_proposals_for_review(self.conn, other_run), [])
+
+    def test_update_proposal_status_to_approved(self):
+        store.save_pipeline_result(self.conn, self.run_id, self._sample_result())
+        row_id = store.list_proposals_for_review(self.conn, self.run_id)[0]["row_id"]
+        store.update_proposal_status(self.conn, row_id, "承認")
+        row = store.get_proposal_for_review(self.conn, row_id)
+        self.assertEqual(row["status"], "承認")
+
+    def test_update_proposal_status_with_edit_changes_after_text(self):
+        store.save_pipeline_result(self.conn, self.run_id, self._sample_result())
+        row_id = store.list_proposals_for_review(self.conn, self.run_id)[0]["row_id"]
+        store.update_proposal_status(self.conn, row_id, "編集済", after="評価欄（達成度・効果）を新設する。")
+        row = store.get_proposal_for_review(self.conn, row_id)
+        self.assertEqual(row["status"], "編集済")
+        self.assertEqual(row["after"], "評価欄（達成度・効果）を新設する。")
+
+    def test_get_proposal_for_review_returns_none_when_missing(self):
+        self.assertIsNone(store.get_proposal_for_review(self.conn, 9999))
+
+    def test_handles_impact_without_evidence(self):
+        result = self._sample_result()
+        result["impacts"][0].evidence = []
+        store.save_pipeline_result(self.conn, self.run_id, result)
+        row = store.list_proposals_for_review(self.conn, self.run_id)[0]
+        self.assertIsNone(row["evidence_quote"])
 
 
 if __name__ == "__main__":
