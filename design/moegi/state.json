@@ -6,6 +6,7 @@
   "approvedAt": "2026-08-08",
   "openIssueIds": ["N-8", "N-4", "R-56", "R-64"],
   "requiredReads": ["design.md", "ledger.md"],
+  "quickOverview": "overview.md（design.mdを可視化した要約。全体像・詰まり所を先に把握したい時に読む）",
   "progress": {
     "D0": "完了（規約照会・問題なし → R-53で論点消滅）",
     "D1": "完了。①旧版PDF確定 ②allowlist確定 ③日報=最小再実装で確定 ④性能実測ゲート合格 ⑤取込・正規化 実装済",
