@@ -305,11 +305,47 @@ def _format_items_block(items: list[ChecklistItem]) -> str:
     return "\n".join(f"{i}. {item.label}（種別: {item.kind}）" for i, item in enumerate(items, start=1))
 
 
-def _extract_json_object(text: str) -> dict | None:
+_TRAILING_FIELD_RE = re.compile(r'"(\w+)"\s*:\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|true|false)')
+
+
+def _recover_trailing_fields(entry: dict, text: str, expected_keys: tuple[str, ...]) -> dict:
+    """途中で閉じたJSONの外側に漏れたキーを、テキスト全体から正規表現で拾って補う。
+
+    ローカル8Bモデルの実測で確認した崩れ方: `rationale` の直後で早々に "}" を
+    出してオブジェクトを閉じ、`confidence`/`evidence_quote` がオブジェクトの外側の
+    ただの `"key": value, ...` として続く。json.loads はオブジェクトの中身しか
+    見ないため、この漏れたキーは黙って失われ、evidence_quote が無いという理由で
+    正しい「要更新」判定ごと捨てられていた。1件のオブジェクトしか無い前提
+    （単発モードの1呼び出し1判定）でのみ安全。複数の判定が並ぶ一括モードの
+    応答には使わない（別の判定のキーを誤って拾う恐れがあるため）。
+    """
+    missing = [k for k in expected_keys if k not in entry]
+    if not missing:
+        return entry
+    recovered = dict(entry)
+    for match in _TRAILING_FIELD_RE.finditer(text):
+        key, raw_value = match.group(1), match.group(2)
+        if key not in missing:
+            continue
+        try:
+            recovered[key] = json.loads(raw_value)
+        except json.JSONDecodeError:
+            recovered[key] = raw_value
+        missing.remove(key)
+    return recovered
+
+
+_MATCH_ITEM_EXPECTED_KEYS = ("verdict", "rationale", "confidence", "evidence_quote")
+_MATCH_NEW_ITEM_EXPECTED_KEYS = ("needed", "rationale", "confidence", "evidence_quote")
+
+
+def _extract_json_object(text: str, expected_keys: tuple[str, ...] = ()) -> dict | None:
     """LLM出力からJSONオブジェクトを1つ抜き出す。前後に余計な文・コードブロック記号が付いても拾う。
 
     非貪欲マッチ（最初の"{"から最初の"}"まで）を使う。判定結果のJSONはキーが
     文字列・数値・真偽値のみのフラットな構造なので、ネストした"{"は現れない前提。
+    expected_keys を渡すと、途中で閉じたJSONの外側に漏れたキーを補う
+    （_recover_trailing_fields）。
     """
     match = re.search(r"\{.*?\}", text, re.DOTALL)
     if not match:
@@ -318,7 +354,9 @@ def _extract_json_object(text: str) -> dict | None:
         data = json.loads(match.group(0))
     except json.JSONDecodeError:
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    return _recover_trailing_fields(data, text, expected_keys) if expected_keys else data
 
 
 def _payload_list(payload: dict | None, *aliases: str) -> list:
@@ -517,7 +555,7 @@ def match_requirements(
                 )
                 continue
 
-            entry = _extract_json_object(result["text"])
+            entry = _extract_json_object(result["text"], _MATCH_ITEM_EXPECTED_KEYS)
             if not entry or entry.get("verdict") != "要更新":
                 continue  # 影響なし、または形式不正な応答は提案を作らない
 
@@ -553,7 +591,11 @@ def match_requirements(
         if store_conn is not None:
             store.record_from_llm_result(store_conn, run_id, "matching", result)
 
-        entry = None if result.get("timeout") else _extract_json_object(result["text"])
+        entry = (
+            None
+            if result.get("timeout")
+            else _extract_json_object(result["text"], _MATCH_NEW_ITEM_EXPECTED_KEYS)
+        )
 
         if is_new_provision:
             impacts.append(_forced_new_item_impact(change, req.text, entry))

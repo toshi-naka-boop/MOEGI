@@ -168,6 +168,27 @@ class MatchRequirementsTest(unittest.TestCase):
         )
         self.assertEqual(self._existing_item_impacts(impacts), [])
 
+    def test_recovers_verdict_when_local_model_closes_json_early(self):
+        # 実機（G9計測）で確認した崩れ方: rationaleの直後で "}" が出て、confidence・
+        # evidence_quoteがオブジェクトの外側に漏れる。パース側で救わないと、
+        # 正しい「要更新」判定ごと evidence 不成立として捨てられていた。
+        malformed = (
+            '{"verdict": "要更新", "rationale": "標準時間内の訪問が厳格化されたため。"}, '
+            '"confidence": 0.8, "evidence_quote": "'
+            "目標達成の程度及びその効果等について評価を行う"
+            '"'
+        )
+        adapter = _FakeAdapter(
+            {"matching": [malformed, '{"needed": false, "rationale": "x", "confidence": 0.1}']}
+        )
+        impacts = pipeline.match_requirements(
+            [self.requirement], {"c": self.change}, self.sitedoc, adapter, run_id="r"
+        )
+        existing = self._existing_item_impacts(impacts)
+        self.assertEqual(len(existing), 1)
+        self.assertEqual(existing[0].verdict, "要更新")
+        self.assertEqual(existing[0].confidence, 0.8)
+
     def test_matches_existing_item_and_still_adds_new_item_for_new_provision(self):
         # 完全新設では、既存項目が「要更新」になっても新規項目の提案が別に立つ（ledger N-7）
         impacts = self._match(
@@ -398,6 +419,27 @@ class ExtractJsonPayloadTest(unittest.TestCase):
 
     def test_returns_none_when_no_json(self):
         self.assertIsNone(pipeline._extract_json_payload("JSONではない出力"))
+
+
+class RecoverTrailingFieldsTest(unittest.TestCase):
+    """G9計測で実測した崩れ方（rationale直後の早すぎる"}"）に対する回復ロジック。"""
+
+    def test_recovers_fields_that_leaked_outside_the_object(self):
+        text = '{"verdict": "要更新", "rationale": "理由"}, "confidence": 0.8, "evidence_quote": "根拠"'
+        entry = pipeline._extract_json_object(text, pipeline._MATCH_ITEM_EXPECTED_KEYS)
+        self.assertEqual(entry["confidence"], 0.8)
+        self.assertEqual(entry["evidence_quote"], "根拠")
+
+    def test_well_formed_object_is_unaffected(self):
+        text = '{"verdict": "要更新", "rationale": "理由", "confidence": 0.8, "evidence_quote": "根拠"}'
+        entry = pipeline._extract_json_object(text, pipeline._MATCH_ITEM_EXPECTED_KEYS)
+        self.assertEqual(entry["evidence_quote"], "根拠")
+
+    def test_without_expected_keys_does_not_recover(self):
+        # expected_keys を渡さない呼び出し（一括モードの応答本体の抽出）は対象外
+        text = '{"verdict": "要更新", "rationale": "理由"}, "confidence": 0.8'
+        entry = pipeline._extract_json_object(text)
+        self.assertNotIn("confidence", entry)
 
 
 class ForcedNewItemForNewProvisionTest(unittest.TestCase):
