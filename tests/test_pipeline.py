@@ -116,12 +116,12 @@ class MatchRequirementsTest(unittest.TestCase):
     def test_creates_impact_for_new_item_when_evidence_is_verifiable(self):
         impacts = self._match(
             [
-                {"verdict": "影響なし", "rationale": "既存項目とは無関係", "confidence": 0.8, "evidence_quote": ""},
+                {"verdict": "影響なし", "rationale": "既存項目とは無関係", "confidence": 0.8, "evidence_segment_id": ""},
                 {
                     "needed": True,
                     "rationale": "評価を記録する項目が無い",
                     "confidence": 0.9,
-                    "evidence_quote": "目標達成の程度及びその効果等について評価を行う",
+                    "evidence_segment_id": "S1",
                 },
             ]
         )
@@ -136,27 +136,28 @@ class MatchRequirementsTest(unittest.TestCase):
         # 既存項目に対する判定だけを見たいテストではこちらを使う。
         return [i for i in impacts if i.sitedoc_item_id is not None]
 
-    def test_drops_impact_when_evidence_quote_not_found_in_notice_text(self):
+    def test_drops_impact_when_evidence_segment_id_does_not_exist(self):
+        # ledger N-10: LLMが実在しない文IDを返した場合（幻覚）は根拠不成立として捨てる。
         impacts = self._match(
             [
-                {"verdict": "影響なし", "rationale": "既存項目とは無関係", "confidence": 0.8, "evidence_quote": ""},
+                {"verdict": "影響なし", "rationale": "既存項目とは無関係", "confidence": 0.8, "evidence_segment_id": ""},
                 {
                     "needed": True,
                     "rationale": "でっちあげ",
                     "confidence": 0.9,
-                    "evidence_quote": "通達本文に存在しない引用文",
+                    "evidence_segment_id": "S99",
                 },
             ]
         )
         self.assertEqual(self._existing_item_impacts(impacts), [])
-        # 幻覚引用は根拠に採らず、条文冒頭へ差し替わること
-        self.assertNotIn("通達本文に存在しない引用文", impacts[0].evidence[0].quote)
+        # 根拠不成立の場合は条文の最初の文へ差し替わること（捏造ではなく実在する文）
+        self.assertIn(impacts[0].evidence[0].quote, self.change.new_section.text)
 
     def test_drops_when_verdict_is_no_impact(self):
         impacts = self._match(
             [
-                {"verdict": "影響なし", "rationale": "無関係", "confidence": 0.1, "evidence_quote": ""},
-                {"needed": False, "rationale": "新規項目も不要", "confidence": 0.6, "evidence_quote": ""},
+                {"verdict": "影響なし", "rationale": "無関係", "confidence": 0.1, "evidence_segment_id": ""},
+                {"needed": False, "rationale": "新規項目も不要", "confidence": 0.6, "evidence_segment_id": ""},
             ]
         )
         self.assertEqual(self._existing_item_impacts(impacts), [])
@@ -170,13 +171,11 @@ class MatchRequirementsTest(unittest.TestCase):
 
     def test_recovers_verdict_when_local_model_closes_json_early(self):
         # 実機（G9計測）で確認した崩れ方: rationaleの直後で "}" が出て、confidence・
-        # evidence_quoteがオブジェクトの外側に漏れる。パース側で救わないと、
+        # evidence_segment_idがオブジェクトの外側に漏れる。パース側で救わないと、
         # 正しい「要更新」判定ごと evidence 不成立として捨てられていた。
         malformed = (
             '{"verdict": "要更新", "rationale": "標準時間内の訪問が厳格化されたため。"}, '
-            '"confidence": 0.8, "evidence_quote": "'
-            "目標達成の程度及びその効果等について評価を行う"
-            '"'
+            '"confidence": 0.8, "evidence_segment_id": "S1"'
         )
         adapter = _FakeAdapter(
             {"matching": [malformed, '{"needed": false, "rationale": "x", "confidence": 0.1}']}
@@ -197,9 +196,9 @@ class MatchRequirementsTest(unittest.TestCase):
                     "verdict": "要更新",
                     "rationale": "評価と合わせて記録が必要",
                     "confidence": 0.7,
-                    "evidence_quote": "目標達成の程度及びその効果等について評価を行う",
+                    "evidence_segment_id": "S1",
                 },
-                {"needed": False, "rationale": "不要", "confidence": 0.2, "evidence_quote": ""},
+                {"needed": False, "rationale": "不要", "confidence": 0.2, "evidence_segment_id": ""},
             ]
         )
         self.assertEqual([i.sitedoc_item_id for i in impacts], ["バイタルサインの記録", None])
@@ -246,16 +245,16 @@ class MatchRequirementsBatchedTest(unittest.TestCase):
         impacts = self._match(
             {
                 "judgements": [
-                    {"item_id": "1", "verdict": "影響なし", "rationale": "無関係", "confidence": 0.8, "evidence_quote": ""},
+                    {"item_id": "1", "verdict": "影響なし", "rationale": "無関係", "confidence": 0.8, "evidence_segment_id": ""},
                     {
                         "item_id": "2",
                         "verdict": "要更新",
                         "rationale": "目標に対する評価が要る",
                         "confidence": 0.7,
-                        "evidence_quote": "目標達成の程度及びその効果等について評価を行う",
+                        "evidence_segment_id": "S1",
                     },
                 ],
-                "new_item": {"needed": False, "rationale": "x", "confidence": 0.1, "evidence_quote": ""},
+                "new_item": {"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""},
             }
         )
         self.assertEqual(len(self.adapter.calls), 1)  # 2項目でも呼び出しは1回
@@ -269,9 +268,9 @@ class MatchRequirementsBatchedTest(unittest.TestCase):
         impacts = self._match(
             {
                 "judgements": [
-                    {"item_id": "1", "verdict": "影響なし", "rationale": "無関係", "confidence": 0.8, "evidence_quote": ""}
+                    {"item_id": "1", "verdict": "影響なし", "rationale": "無関係", "confidence": 0.8, "evidence_segment_id": ""}
                 ],
-                "new_item": {"needed": False, "rationale": "x", "confidence": 0.1, "evidence_quote": ""},
+                "new_item": {"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""},
             }
         )
         existing = self._existing_item_impacts(impacts)
@@ -294,20 +293,20 @@ class MatchRequirementsBatchedTest(unittest.TestCase):
         self.assertEqual(len(new_items), 1)
         self.assertEqual(new_items[0].verdict, "要更新")
 
-    def test_unverifiable_quote_is_dropped(self):
+    def test_drops_impact_when_evidence_segment_id_does_not_exist(self):
         impacts = self._match(
             {
                 "judgements": [
-                    {"item_id": "1", "verdict": "影響なし", "rationale": "x", "confidence": 0.8, "evidence_quote": ""},
+                    {"item_id": "1", "verdict": "影響なし", "rationale": "x", "confidence": 0.8, "evidence_segment_id": ""},
                     {
                         "item_id": "2",
                         "verdict": "要更新",
                         "rationale": "でっちあげ",
                         "confidence": 0.9,
-                        "evidence_quote": "通達本文に存在しない引用文",
+                        "evidence_segment_id": "S99",
                     },
                 ],
-                "new_item": {"needed": False, "rationale": "x", "confidence": 0.1, "evidence_quote": ""},
+                "new_item": {"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""},
             }
         )
         self.assertEqual(self._existing_item_impacts(impacts), [])
@@ -316,14 +315,14 @@ class MatchRequirementsBatchedTest(unittest.TestCase):
         impacts = self._match(
             {
                 "judgements": [
-                    {"item_id": "1", "verdict": "影響なし", "rationale": "x", "confidence": 0.8, "evidence_quote": ""},
-                    {"item_id": "2", "verdict": "影響なし", "rationale": "x", "confidence": 0.8, "evidence_quote": ""},
+                    {"item_id": "1", "verdict": "影響なし", "rationale": "x", "confidence": 0.8, "evidence_segment_id": ""},
+                    {"item_id": "2", "verdict": "影響なし", "rationale": "x", "confidence": 0.8, "evidence_segment_id": ""},
                 ],
                 "new_item": {
                     "needed": True,
                     "rationale": "評価を記録する項目が無い",
                     "confidence": 0.9,
-                    "evidence_quote": "目標達成の程度及びその効果等について評価を行う",
+                    "evidence_segment_id": "S1",
                 },
             }
         )
@@ -425,15 +424,15 @@ class RecoverTrailingFieldsTest(unittest.TestCase):
     """G9計測で実測した崩れ方（rationale直後の早すぎる"}"）に対する回復ロジック。"""
 
     def test_recovers_fields_that_leaked_outside_the_object(self):
-        text = '{"verdict": "要更新", "rationale": "理由"}, "confidence": 0.8, "evidence_quote": "根拠"'
+        text = '{"verdict": "要更新", "rationale": "理由"}, "confidence": 0.8, "evidence_segment_id": "S1"'
         entry = pipeline._extract_json_object(text, pipeline._MATCH_ITEM_EXPECTED_KEYS)
         self.assertEqual(entry["confidence"], 0.8)
-        self.assertEqual(entry["evidence_quote"], "根拠")
+        self.assertEqual(entry["evidence_segment_id"], "S1")
 
     def test_well_formed_object_is_unaffected(self):
-        text = '{"verdict": "要更新", "rationale": "理由", "confidence": 0.8, "evidence_quote": "根拠"}'
+        text = '{"verdict": "要更新", "rationale": "理由", "confidence": 0.8, "evidence_segment_id": "S1"}'
         entry = pipeline._extract_json_object(text, pipeline._MATCH_ITEM_EXPECTED_KEYS)
-        self.assertEqual(entry["evidence_quote"], "根拠")
+        self.assertEqual(entry["evidence_segment_id"], "S1")
 
     def test_without_expected_keys_does_not_recover(self):
         # expected_keys を渡さない呼び出し（一括モードの応答本体の抽出）は対象外
@@ -477,11 +476,11 @@ class ForcedNewItemForNewProvisionTest(unittest.TestCase):
                             "verdict": "要更新",
                             "rationale": "過剰検出",
                             "confidence": 0.7,
-                            "evidence_quote": "目標達成の程度及びその効果等について評価を行う",
+                            "evidence_segment_id": "S1",
                         },
                         ensure_ascii=False,
                     ),
-                    json.dumps({"needed": False, "rationale": "不要", "confidence": 0.2, "evidence_quote": ""}),
+                    json.dumps({"needed": False, "rationale": "不要", "confidence": 0.2, "evidence_segment_id": ""}),
                 ]
             }
         )
@@ -493,11 +492,11 @@ class ForcedNewItemForNewProvisionTest(unittest.TestCase):
         self.assertEqual(new_items[0].verdict, "要更新")
         self.assertTrue(new_items[0].evidence)  # 根拠が無いと更新案が作られない
 
-    def test_single_mode_falls_back_to_notice_head_when_llm_gives_no_usable_quote(self):
+    def test_single_mode_falls_back_to_first_segment_when_llm_gives_no_usable_reference(self):
         adapter = _FakeAdapter(
             {
                 "matching": [
-                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_quote": ""}),
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
                     "これはJSONではない出力です",
                 ]
             }
@@ -507,7 +506,7 @@ class ForcedNewItemForNewProvisionTest(unittest.TestCase):
         )
         new_items = self._new_item_impacts(impacts)
         self.assertEqual(len(new_items), 1)
-        # 根拠は条文冒頭。通達原文中に実在する文字列であること
+        # 根拠は条文の最初の文。通達原文中に実在する文字列であること（捏造ではない）
         quote = new_items[0].evidence[0].quote
         self.assertIn(quote, self.new_provision.new_section.text)
         self.assertEqual(new_items[0].rationale, self.requirement.text)
@@ -519,9 +518,9 @@ class ForcedNewItemForNewProvisionTest(unittest.TestCase):
                     json.dumps(
                         {
                             "judgements": [
-                                {"item_id": "1", "verdict": "影響なし", "rationale": "x", "confidence": 0.8, "evidence_quote": ""}
+                                {"item_id": "1", "verdict": "影響なし", "rationale": "x", "confidence": 0.8, "evidence_segment_id": ""}
                             ],
-                            "new_item": {"needed": False, "rationale": "不要", "confidence": 0.2, "evidence_quote": ""},
+                            "new_item": {"needed": False, "rationale": "不要", "confidence": 0.2, "evidence_segment_id": ""},
                         },
                         ensure_ascii=False,
                     )
@@ -547,7 +546,7 @@ class ForcedNewItemForNewProvisionTest(unittest.TestCase):
             {
                 "matching": [
                     json.dumps(
-                        {"verdict": "要更新", "rationale": "y", "confidence": 0.7, "evidence_quote": "評価を行う"},
+                        {"verdict": "要更新", "rationale": "y", "confidence": 0.7, "evidence_segment_id": "S1"},
                         ensure_ascii=False,
                     )
                 ]
@@ -564,21 +563,60 @@ class ForcedNewItemForNewProvisionTest(unittest.TestCase):
         self.assertEqual(self._new_item_impacts(impacts), [])
 
 
-class FindQuoteOffsetTest(unittest.TestCase):
-    def test_exact_match(self):
-        self.assertEqual(pipeline._find_quote_offset("評価を行う", "前置き評価を行う後置き"), 3)
+class SegmentNoticeTextTest(unittest.TestCase):
+    """ledger N-10: evidence_quoteの逐語生成をやめ、文ID参照方式に変更。"""
 
-    def test_tolerates_pdf_line_wrap_inside_quote(self):
-        # PDF抽出テキストは行送りの都合で文中に改行が入ることがある。
-        # 引用文には改行が無くても、原文中の対応箇所を見つけられること。
-        source = "指定訪問看護の提供に当たっては、目標達成の程度及びその効果等について評価を\n行い、その内容を記録すること。"
-        quote = "目標達成の程度及びその効果等について評価を行い、その内容を記録すること。"
-        offset = pipeline._find_quote_offset(quote, source)
-        self.assertNotEqual(offset, -1)
-        self.assertEqual(source[offset], "目")
+    def test_splits_on_sentence_boundaries_with_correct_offsets(self):
+        text = "第一文です。第二文です。第三文です。"
+        segments = pipeline._segment_notice_text(text)
+        self.assertEqual([s.id for s in segments], ["S1", "S2", "S3"])
+        self.assertEqual([s.text for s in segments], ["第一文です。", "第二文です。", "第三文です。"])
+        for s in segments:
+            self.assertEqual(text[s.offset : s.offset + len(s.text)], s.text)
 
-    def test_returns_minus_one_when_not_found(self):
-        self.assertEqual(pipeline._find_quote_offset("存在しない文", "全く関係ない原文"), -1)
+    def test_no_period_treats_whole_text_as_one_segment(self):
+        segments = pipeline._segment_notice_text("句点の無い文字列")
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0].id, "S1")
+        self.assertEqual(segments[0].text, "句点の無い文字列")
+
+    def test_trailing_text_after_last_period_becomes_final_segment(self):
+        segments = pipeline._segment_notice_text("文です。末尾の断片")
+        self.assertEqual([s.id for s in segments], ["S1", "S2"])
+        self.assertEqual(segments[1].text, "末尾の断片")
+
+
+class VerifiedEvidenceTest(unittest.TestCase):
+    """ledger N-10: 文字列の逐語一致ではなく、文IDが実在するかだけを確認する。"""
+
+    def setUp(self):
+        self.change = pipeline.Change(
+            id="c",
+            old_section=None,
+            new_section=_section("第4の4", "第一文です。第二文です。"),
+            kind="追加",
+        )
+        self.segments = pipeline._segment_notice_text(self.change.new_section.text)
+
+    def test_resolves_the_correct_segment_by_id(self):
+        # S1ではなくS2を明示的に選べること（先頭に固定されていないことの確認）
+        evidence = pipeline._verified_evidence({"evidence_segment_id": "S2"}, self.change, self.segments)
+        self.assertEqual(evidence[0].quote, "第二文です。")
+        self.assertEqual(evidence[0].offset, self.change.new_section.text.index("第二文です。"))
+
+    def test_normalizes_bare_digit_id(self):
+        # モデルが "S" を落として数字だけ返すことがある
+        evidence = pipeline._verified_evidence({"evidence_segment_id": "2"}, self.change, self.segments)
+        self.assertEqual(evidence[0].quote, "第二文です。")
+
+    def test_returns_none_for_nonexistent_id(self):
+        self.assertIsNone(
+            pipeline._verified_evidence({"evidence_segment_id": "S99"}, self.change, self.segments)
+        )
+
+    def test_returns_none_for_empty_id(self):
+        self.assertIsNone(pipeline._verified_evidence({"evidence_segment_id": ""}, self.change, self.segments))
+        self.assertIsNone(pipeline._verified_evidence({}, self.change, self.segments))
 
 
 class DraftProposalsTest(unittest.TestCase):
@@ -667,7 +705,7 @@ class TimeoutHandlingTest(unittest.TestCase):
             {
                 "matching": [
                     _TIMEOUT,
-                    json.dumps({"needed": False, "rationale": "x", "confidence": 0.5, "evidence_quote": ""}),
+                    json.dumps({"needed": False, "rationale": "x", "confidence": 0.5, "evidence_segment_id": ""}),
                 ]
             }
         )
@@ -714,7 +752,7 @@ class RunLabelFilterTest(unittest.TestCase):
             {
                 "diff": ["cの要約"],
                 "requirement": ["cの要件"],
-                "matching": [json.dumps({"needed": False, "rationale": "x", "confidence": 0.1, "evidence_quote": ""})],
+                "matching": [json.dumps({"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""})],
                 # cは完全新設なので新規項目の提案が立ち、更新案生成まで到達する（ledger N-7）
                 "draft": [json.dumps({"drafts": [{"item_id": "1", "after": "評価欄を新設する。"}]}, ensure_ascii=False)],
             }

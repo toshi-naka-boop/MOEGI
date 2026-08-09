@@ -246,15 +246,53 @@ def extract_requirements(
 # 出力形式が崩れやすい（実機検証で確認: 選択肢を"AまたはB"のまま書き写す・JSON崩れ・
 # 実行時間39秒超）。そのため1項目=1呼び出しに分割し、既存項目のどれにも該当しなかった
 # 場合のみ「新規項目が必要か」を追加で1回問う（design.md §6.4 のChange.kind「追加」に対応）。
+
+
+@dataclass
+class _Segment:
+    """条文本文を文単位に区切った1文（design.md §6.1 v12・ledger N-10）。"""
+
+    id: str
+    text: str
+    offset: int
+
+
+def _segment_notice_text(text: str) -> list[_Segment]:
+    """条文本文を「。」区切りで文単位に分け、S1, S2, ... のIDを振る。
+
+    LLMには逐語引用ではなく、この文IDだけを返させる。引用文字列は常にこの関数の
+    出力からコード側で切り出すため、「evidence_quoteをLLMに書き写させると途中で
+    崩れる・幻覚する」という失敗モード（D3実測・ledger N-9）が構造的に起こらなくなる
+    ——判定（どの文が根拠か選ぶ）と再現（その文を正確に取り出す）を分離する。
+    句点が1つも無ければ全体を1文として扱う。
+    """
+    segments: list[_Segment] = []
+    start = 0
+    for match in re.finditer("。", text):
+        end = match.end()
+        chunk = text[start:end]
+        if chunk.strip():
+            segments.append(_Segment(id=f"S{len(segments) + 1}", text=chunk, offset=start))
+        start = end
+    tail = text[start:]
+    if tail.strip():
+        segments.append(_Segment(id=f"S{len(segments) + 1}", text=tail, offset=start))
+    return segments
+
+
+def _format_segments_block(segments: list[_Segment]) -> str:
+    return "\n".join(f"{s.id}: {s.text.strip()}" for s in segments)
+
+
 _MATCH_ITEM_PROMPT = """あなたは訪問看護事業所のチェックリスト担当者です。
-以下の「現場への要求事項」と「通達原文」をもとに、事業所チェックリストの1項目
+以下の「現場への要求事項」と、文ごとに区切った「通達原文」をもとに、事業所チェックリストの1項目
 「{item_label}」が、この要求事項によって「要更新」か「影響なし」かを判定してください。
 
 【現場への要求事項】
 {requirement_text}
 
-【通達原文（{path}）】
-{notice_text}
+【通達原文（{path}・文単位）】
+{segments_block}
 
 【判定対象のチェックリスト項目】
 {item_label}
@@ -262,13 +300,14 @@ _MATCH_ITEM_PROMPT = """あなたは訪問看護事業所のチェックリス�
 【出力形式】
 次のJSONオブジェクトのみを出力すること。前置き・説明文・コードブロック記号は付けないこと。
 verdictの値は "要更新" か "影響なし" のどちらか一方をそのまま使うこと（他の文字列を使わない・両方書かない）。
-evidence_quoteは、verdictが"要更新"の場合のみ、【通達原文】の中の文字列を一字一句そのまま抜き出して入れること（原文に無い文章を作らない）。影響なしの場合は空文字("")。
+evidence_segment_idは、verdictが"要更新"の場合のみ、根拠となった文のID（例: "S2"）を1つだけ入れること。
+文章そのものを書き写さないこと。影響なしの場合は空文字("")。
 
 出力例1（該当する場合）:
-{{"verdict": "要更新", "rationale": "判定理由をここに", "confidence": 0.8, "evidence_quote": "通達原文中の一致する部分文字列"}}
+{{"verdict": "要更新", "rationale": "判定理由をここに", "confidence": 0.8, "evidence_segment_id": "S2"}}
 
 出力例2（該当しない場合）:
-{{"verdict": "影響なし", "rationale": "判定理由をここに", "confidence": 0.8, "evidence_quote": ""}}
+{{"verdict": "影響なし", "rationale": "判定理由をここに", "confidence": 0.8, "evidence_segment_id": ""}}
 """
 
 _MATCH_NEW_ITEM_PROMPT = """あなたは訪問看護事業所のチェックリスト担当者です。
@@ -279,19 +318,20 @@ _MATCH_NEW_ITEM_PROMPT = """あなたは訪問看護事業所のチェックリ�
 【現場への要求事項】
 {requirement_text}
 
-【通達原文（{path}）】
-{notice_text}
+【通達原文（{path}・文単位）】
+{segments_block}
 
 【出力形式】
 次のJSONオブジェクトのみを出力すること。前置き・説明文・コードブロック記号は付けないこと。
 neededの値は true か false のいずれかの真偽値。
-evidence_quoteは、neededがtrueの場合のみ、【通達原文】の中の文字列を一字一句そのまま抜き出して入れること（原文に無い文章を作らない）。falseの場合は空文字("")。
+evidence_segment_idは、neededがtrueの場合のみ、根拠となった文のID（例: "S1"）を1つだけ入れること。
+文章そのものを書き写さないこと。falseの場合は空文字("")。
 
 出力例1（必要な場合）:
-{{"needed": true, "rationale": "判定理由をここに", "confidence": 0.8, "evidence_quote": "通達原文中の一致する部分文字列"}}
+{{"needed": true, "rationale": "判定理由をここに", "confidence": 0.8, "evidence_segment_id": "S1"}}
 
 出力例2（不要な場合）:
-{{"needed": false, "rationale": "判定理由をここに", "confidence": 0.8, "evidence_quote": ""}}
+{{"needed": false, "rationale": "判定理由をここに", "confidence": 0.8, "evidence_segment_id": ""}}
 """
 
 
@@ -312,9 +352,9 @@ def _recover_trailing_fields(entry: dict, text: str, expected_keys: tuple[str, .
     """途中で閉じたJSONの外側に漏れたキーを、テキスト全体から正規表現で拾って補う。
 
     ローカル8Bモデルの実測で確認した崩れ方: `rationale` の直後で早々に "}" を
-    出してオブジェクトを閉じ、`confidence`/`evidence_quote` がオブジェクトの外側の
+    出してオブジェクトを閉じ、`confidence`/`evidence_segment_id` がオブジェクトの外側の
     ただの `"key": value, ...` として続く。json.loads はオブジェクトの中身しか
-    見ないため、この漏れたキーは黙って失われ、evidence_quote が無いという理由で
+    見ないため、この漏れたキーは黙って失われ、evidence_segment_id が無いという理由で
     正しい「要更新」判定ごと捨てられていた。1件のオブジェクトしか無い前提
     （単発モードの1呼び出し1判定）でのみ安全。複数の判定が並ぶ一括モードの
     応答には使わない（別の判定のキーを誤って拾う恐れがあるため）。
@@ -335,8 +375,8 @@ def _recover_trailing_fields(entry: dict, text: str, expected_keys: tuple[str, .
     return recovered
 
 
-_MATCH_ITEM_EXPECTED_KEYS = ("verdict", "rationale", "confidence", "evidence_quote")
-_MATCH_NEW_ITEM_EXPECTED_KEYS = ("needed", "rationale", "confidence", "evidence_quote")
+_MATCH_ITEM_EXPECTED_KEYS = ("verdict", "rationale", "confidence", "evidence_segment_id")
+_MATCH_NEW_ITEM_EXPECTED_KEYS = ("needed", "rationale", "confidence", "evidence_segment_id")
 
 
 def _extract_json_object(text: str, expected_keys: tuple[str, ...] = ()) -> dict | None:
@@ -415,75 +455,55 @@ def _extract_json_payload(text: str) -> dict | None:
     return None
 
 
-def _find_quote_offset(quote: str, source_text: str) -> int:
-    """quoteをsource_text内で探す。
+def _verified_evidence(
+    entry: dict, change: Change, segments: list[_Segment]
+) -> list[Evidence] | None:
+    """LLMが返した evidence_segment_id が実在する文IDかどうかを確認する（ledger N-10）。
 
-    PDF抽出テキストは行送りの都合で、日本語の文中（単語の区切りとは無関係な位置）に
-    改行が入ることがあり、LLMが引用する際はその改行が失われがち。まず完全一致を試し、
-    失敗したら双方から空白類（改行含む）を取り除いた「詰めた」文字列同士で照合し、
-    見つかった位置を元のsource_text上のオフセットへマップし直す。
+    文字列の逐語一致は要求しない。IDが実在する文を指していれば、引用文字列は
+    segments（コード側の機械的な文分割結果）からそのまま取り出す——LLMに書き写させ
+    ないので、「evidence_quoteの内容が途中で崩れる・幻覚する」という失敗モード
+    （D3実測・ledger N-9）が原理的に起こらない。IDが空・実在しなければNoneを返す
+    （design.md §6.4「Impact.evidenceは必須項目。空の更新案は承認UIに出さない」）。
+    単発モードと一括モードの両方で同一に守るため共通化してある。
     """
-    offset = source_text.find(quote)
-    if offset != -1:
-        return offset
-
-    compact_chars: list[str] = []
-    index_map: list[int] = []  # compact_chars[i] は source_text[index_map[i]] に対応
-    for i, ch in enumerate(source_text):
-        if not ch.isspace():
-            compact_chars.append(ch)
-            index_map.append(i)
-    compact_source = "".join(compact_chars)
-    compact_quote = "".join(ch for ch in quote if not ch.isspace())
-
-    if not compact_quote:
-        return -1
-    compact_offset = compact_source.find(compact_quote)
-    if compact_offset == -1:
-        return -1
-    return index_map[compact_offset]
-
-
-def _verified_evidence(entry: dict, change: Change) -> list[Evidence] | None:
-    """LLMが返した evidence_quote が通達原文中に実在するか裏取りする（幻覚対策）。
-
-    実在しなければ None を返す。design.md §6.4「Impact.evidenceは必須項目。
-    空の更新案は承認UIに出さない」を、単発モードと一括モードの両方で同一に守るため
-    共通化してある（D4のゴールドセット比較で、2モードの差が判定方法の差にならないように）。
-    """
-    quote = str(entry.get("evidence_quote") or "").strip()
-    if not quote:
+    seg_id = str(entry.get("evidence_segment_id") or "").strip()
+    if not seg_id:
         return None
-    offset = _find_quote_offset(quote, change.new_section.text)
-    if offset == -1:
-        return None
-    return [Evidence(notice_section_path=change.new_section.path, quote=quote, offset=offset)]
+    if seg_id.isdigit():
+        seg_id = f"S{seg_id}"  # モデルが "S" を落として数字だけ返すことがあるための正規化
+    for segment in segments:
+        if segment.id == seg_id:
+            return [
+                Evidence(
+                    notice_section_path=change.new_section.path,
+                    quote=segment.text.strip(),
+                    offset=segment.offset,
+                )
+            ]
+    return None
 
 
-def _leading_quote(text: str, limit: int = 120) -> str:
-    """条文本文の冒頭を、決定的な原文トレース根として切り出す。"""
-    head = text.strip()[:limit]
-    sentence_end = head.find("。")
-    return head[: sentence_end + 1] if sentence_end != -1 else head
-
-
-def _forced_new_item_impact(change: Change, requirement_text: str, entry: dict | None) -> Impact:
+def _forced_new_item_impact(
+    change: Change, requirement_text: str, entry: dict | None, segments: list[_Segment]
+) -> Impact:
     """完全新設の条文には、新規項目の提案を必ず作る（ledger N-7・v11でユーザー確定）。
 
     旧版に対応条文が無い（`Change.kind == "追加"`）ということは、その要求に対応する
     既存項目もチェックリストに無い。にもかかわらず、ローカル8Bが既存項目を過剰に
     「要更新」と返すたびに新規項目の提案が潰れ、デモのアンカーが出なくなっていた。
     → **提案を作るかどうかはLLMの needed 判定に委ねず、条文の種別で決める。**
-    LLMの rationale / evidence は使えるときだけ使い、使えなければ条文冒頭を根拠に据える
-    （新設された条文そのものが根拠なので、これは捏造にならない）。
+    LLMの rationale / evidence は使えるときだけ使い、使えなければ条文の最初の文を
+    根拠に据える（新設された条文そのものが根拠なので、これは捏造にならない）。
     """
-    evidence = _verified_evidence(entry, change) if entry else None
+    evidence = _verified_evidence(entry, change, segments) if entry else None
     if evidence is None:
+        first = segments[0]
         evidence = [
             Evidence(
                 notice_section_path=change.new_section.path,
-                quote=_leading_quote(change.new_section.text),
-                offset=0,
+                quote=first.text.strip(),
+                offset=first.offset,
             )
         ]
     rationale = str((entry or {}).get("rationale") or "").strip() or requirement_text
@@ -525,14 +545,16 @@ def match_requirements(
     「要更新」にならなかった場合のみ、新規項目の要否を追加で1回問う。
 
     design.md §6.4「Impact.evidenceは必須項目。空の更新案は承認UIに出さない」を守るため、
-    LLMが返した evidence_quote が通達原文（change.new_section.text）中に実在しない場合は
-    根拠不成立とみなし、そのImpactを作らない（幻覚対策）。
+    LLMが返した evidence_segment_id が実在する文を指していない場合は根拠不成立とみなし、
+    そのImpactを作らない（ledger N-10。引用文字列自体はコード側の文分割から取るため
+    「引用が途中で崩れる」という失敗モードは起こらない）。
     """
     impacts: list[Impact] = []
     existing_labels = "、".join(item.label for item in sitedoc.items)
 
     for req in requirements:
         change = changes_by_id[req.change_id]
+        segments = _segment_notice_text(change.new_section.text)
         matched_existing = False
 
         for item in sitedoc.items:
@@ -540,7 +562,7 @@ def match_requirements(
                 item_label=item.label,
                 requirement_text=req.text,
                 path=change.new_section.path,
-                notice_text=change.new_section.text,
+                segments_block=_format_segments_block(segments),
             )
             result = adapter.complete("matching", prompt)
             if store_conn is not None:
@@ -559,9 +581,9 @@ def match_requirements(
             if not entry or entry.get("verdict") != "要更新":
                 continue  # 影響なし、または形式不正な応答は提案を作らない
 
-            evidence = _verified_evidence(entry, change)
+            evidence = _verified_evidence(entry, change, segments)
             if evidence is None:
-                continue  # 通達原文中で裏取りできない引用はevidence不成立→提案を作らない
+                continue  # 実在しない文IDはevidence不成立→提案を作らない
 
             matched_existing = True
             impacts.append(
@@ -585,7 +607,7 @@ def match_requirements(
             existing_labels=existing_labels,
             requirement_text=req.text,
             path=change.new_section.path,
-            notice_text=change.new_section.text,
+            segments_block=_format_segments_block(segments),
         )
         result = adapter.complete("matching", prompt)
         if store_conn is not None:
@@ -598,7 +620,7 @@ def match_requirements(
         )
 
         if is_new_provision:
-            impacts.append(_forced_new_item_impact(change, req.text, entry))
+            impacts.append(_forced_new_item_impact(change, req.text, entry, segments))
             continue
 
         if result.get("timeout"):
@@ -608,9 +630,9 @@ def match_requirements(
         if not entry or not entry.get("needed"):
             continue
 
-        evidence = _verified_evidence(entry, change)
+        evidence = _verified_evidence(entry, change, segments)
         if evidence is None:
-            continue  # 通達原文中で裏取りできない引用はevidence不成立→提案を作らない
+            continue  # 実在しない文IDはevidence不成立→提案を作らない
 
         impacts.append(
             Impact(
@@ -639,8 +661,8 @@ def match_requirements(
 # ---------------------------------------------------------------------------
 
 _MATCH_BATCH_PROMPT = """あなたは訪問看護事業所のチェックリスト担当者です。
-以下の「通達原文」で新たに求められるようになった内容にもとづき、事業所チェックリストの
-各項目について「この通達変更を受けて項目の文言を書き換える必要があるか」を判定してください。
+以下の、文ごとに区切った「通達原文」で新たに求められるようになった内容にもとづき、
+事業所チェックリストの各項目について「この通達変更を受けて項目の文言を書き換える必要があるか」を判定してください。
 
 【判定の基準】
 - "要更新" は、この通達変更が要求する内容を書き加えないと、その項目が通達に適合しなくなる場合だけ。
@@ -650,8 +672,8 @@ _MATCH_BATCH_PROMPT = """あなたは訪問看護事業所のチェックリス�
 【現場への要求事項】
 {requirement_text}
 
-【通達原文（{path}）】
-{notice_text}
+【通達原文（{path}・文単位）】
+{segments_block}
 
 【判定対象のチェックリスト項目】
 {items_block}
@@ -659,14 +681,14 @@ _MATCH_BATCH_PROMPT = """あなたは訪問看護事業所のチェックリス�
 【出力形式】
 次の形のJSONオブジェクトのみを出力すること。前置き・説明文・コードブロック記号は付けないこと。
 judgements には項目番号 {id_list} を1つ残らず含めること（1つでも欠けたら不正な出力とみなす）。
-各要素は item_id・verdict・rationale・confidence・evidence_quote の5つのキーを必ず持つこと。
+各要素は item_id・verdict・rationale・confidence・evidence_segment_id の5つのキーを必ず持つこと。
 item_id は上記の項目番号を文字列で入れること。項目のラベル文言は書き写さないこと。
 verdict は "要更新" か "影響なし" のどちらか一方をそのまま使うこと（他の文字列を使わない・両方書かない）。
-evidence_quote は、verdict が "要更新" の場合、【通達原文】の中の文字列を一字一句そのまま抜き出して入れること（原文に無い文章を作らない。要約しない）。"影響なし" の場合は空文字("")。
+evidence_segment_id は、verdict が "要更新" の場合、根拠となった文のID（例: "S2"）を1つだけ入れること。文章そのものを書き写さないこと。"影響なし" の場合は空文字("")。
 new_item は、どの既存項目にも該当しない場合にチェックリストへ新規項目を追加する必要があるかどうか。needed は true か false の真偽値。
 
 出力例:
-{{"judgements": [{{"item_id": "1", "verdict": "影響なし", "rationale": "判定理由をここに", "confidence": 0.8, "evidence_quote": ""}}, {{"item_id": "2", "verdict": "要更新", "rationale": "判定理由をここに", "confidence": 0.7, "evidence_quote": "通達原文中の一致する部分文字列"}}], "new_item": {{"needed": false, "rationale": "判定理由をここに", "confidence": 0.6, "evidence_quote": ""}}}}
+{{"judgements": [{{"item_id": "1", "verdict": "影響なし", "rationale": "判定理由をここに", "confidence": 0.8, "evidence_segment_id": ""}}, {{"item_id": "2", "verdict": "要更新", "rationale": "判定理由をここに", "confidence": 0.7, "evidence_segment_id": "S2"}}], "new_item": {{"needed": false, "rationale": "判定理由をここに", "confidence": 0.6, "evidence_segment_id": ""}}}}
 """
 
 
@@ -685,10 +707,11 @@ def _match_requirements_batched(
 
     for req in requirements:
         change = changes_by_id[req.change_id]
+        segments = _segment_notice_text(change.new_section.text)
         prompt = _MATCH_BATCH_PROMPT.format(
             requirement_text=req.text,
             path=change.new_section.path,
-            notice_text=change.new_section.text,
+            segments_block=_format_segments_block(segments),
             items_block=_format_items_block(sitedoc.items),
             id_list=id_list,
         )
@@ -706,7 +729,7 @@ def _match_requirements_batched(
             # 新規項目の提案は条文の種別だけで決まる（LLMの応答を必要としない）ので、
             # timeoutでも作れる。ここで作らないと、回線断のデモで落ちが消える。
             if change.kind == "追加":
-                impacts.append(_forced_new_item_impact(change, req.text, None))
+                impacts.append(_forced_new_item_impact(change, req.text, None, segments))
             continue
 
         payload = _extract_json_payload(result["text"])
@@ -727,9 +750,9 @@ def _match_requirements_batched(
                 continue
             if entry.get("verdict") != "要更新":
                 continue
-            evidence = _verified_evidence(entry, change)
+            evidence = _verified_evidence(entry, change, segments)
             if evidence is None:
-                continue  # 通達原文中で裏取りできない引用はevidence不成立→提案を作らない
+                continue  # 実在しない文IDはevidence不成立→提案を作らない
             matched_existing = True
             impacts.append(
                 Impact(
@@ -748,7 +771,7 @@ def _match_requirements_batched(
 
         # ledger N-7: 完全新設の条文は、LLMのneeded判定に関わらず新規項目の提案を作る。
         if change.kind == "追加":
-            impacts.append(_forced_new_item_impact(change, req.text, new_item))
+            impacts.append(_forced_new_item_impact(change, req.text, new_item, segments))
             continue
 
         if matched_existing:
@@ -756,7 +779,7 @@ def _match_requirements_batched(
 
         if new_item is None or not new_item.get("needed"):
             continue
-        evidence = _verified_evidence(new_item, change)
+        evidence = _verified_evidence(new_item, change, segments)
         if evidence is None:
             continue
         impacts.append(
