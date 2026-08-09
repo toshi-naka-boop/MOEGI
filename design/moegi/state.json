@@ -1,20 +1,21 @@
 {
   "currentNode": "実装",
-  "status": "awaiting_user",
+  "status": "in_progress",
   "designVersion": "v11",
   "criticRound": 2,
   "approvedAt": "2026-08-08",
-  "openIssueIds": ["N-7", "N-4", "R-56", "R-64", "R-65"],
+  "openIssueIds": ["N-8", "N-4", "R-56", "R-64", "R-65"],
   "requiredReads": ["design.md", "ledger.md"],
   "progress": {
     "D0": "完了（規約照会・問題なし → R-53で論点消滅）",
     "D1": "完了。①旧版PDF確定 ②allowlist確定 ③日報=最小再実装で確定 ④性能実測ゲート合格 ⑤取込・正規化 実装済",
-    "D2": "実装完了・CLI通し可（一括/単発の2モード）。ただし品質は未達 — N-7（アンカー未検出）とR-65（一括の再現率0）が未解決"
+    "D2": "完了。CLIで通達ペア→更新案JSONが出る。一括/単発の2モード。N-7解決でデモのアンカーが両モードで出る"
   },
-  "nextAction": "N-7 のユーザー判断待ち: 新規項目提案がアンカーを取れない件（matched_existing の早期continue／過剰検出の抑制／完全新設は常に新規項目提案）。決まり次第 D3 のゴールドセット作成へ",
+  "nextAction": "D3: ゴールドセット作成 → G9の再現率計測。N-8（過剰検出）はD3をブロックせず、D4の誤検出率評価で扱う",
+  "commitPolicy": "D区切りごとにコミットする（feat: D1 / feat: D2 ...）。ユーザー決定 2026-08-09",
   "blockedOn": {
-    "N-7": "設計判断。D3の正解データを書く前に決める必要がある",
-    "R-64": "orcarouter/auto の名前空間付き指定の疎通確認（ORCA接続可能なセッションで）"
+    "R-64": "orcarouter/auto の名前空間付き指定の疎通確認（ORCA接続可能なセッションで）",
+    "env": ".env.example の記述が旧方針（ORCA未入手）のまま。フックでClaudeが書けないためユーザーが手で更新する"
   },
   "lastUpdated": "2026-08-09"
 }

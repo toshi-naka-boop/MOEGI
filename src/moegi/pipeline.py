@@ -422,6 +422,44 @@ def _verified_evidence(entry: dict, change: Change) -> list[Evidence] | None:
     return [Evidence(notice_section_path=change.new_section.path, quote=quote, offset=offset)]
 
 
+def _leading_quote(text: str, limit: int = 120) -> str:
+    """条文本文の冒頭を、決定的な原文トレース根として切り出す。"""
+    head = text.strip()[:limit]
+    sentence_end = head.find("。")
+    return head[: sentence_end + 1] if sentence_end != -1 else head
+
+
+def _forced_new_item_impact(change: Change, requirement_text: str, entry: dict | None) -> Impact:
+    """完全新設の条文には、新規項目の提案を必ず作る（ledger N-7・v11でユーザー確定）。
+
+    旧版に対応条文が無い（`Change.kind == "追加"`）ということは、その要求に対応する
+    既存項目もチェックリストに無い。にもかかわらず、ローカル8Bが既存項目を過剰に
+    「要更新」と返すたびに新規項目の提案が潰れ、デモのアンカーが出なくなっていた。
+    → **提案を作るかどうかはLLMの needed 判定に委ねず、条文の種別で決める。**
+    LLMの rationale / evidence は使えるときだけ使い、使えなければ条文冒頭を根拠に据える
+    （新設された条文そのものが根拠なので、これは捏造にならない）。
+    """
+    evidence = _verified_evidence(entry, change) if entry else None
+    if evidence is None:
+        evidence = [
+            Evidence(
+                notice_section_path=change.new_section.path,
+                quote=_leading_quote(change.new_section.text),
+                offset=0,
+            )
+        ]
+    rationale = str((entry or {}).get("rationale") or "").strip() or requirement_text
+    return Impact(
+        id=f"impact-{change.id}-new",
+        change_id=change.id,
+        sitedoc_item_id=None,
+        verdict="要更新",
+        rationale=rationale,
+        confidence=float((entry or {}).get("confidence") or 0.0),
+        evidence=evidence,
+    )
+
+
 def _undecidable_impact(change: Change, item_label: str | None, reason: str) -> Impact:
     """design.md §6.6（v10）: 判定できなかった項目を黙って捨てず「判定不能」として残す。"""
     return Impact(
@@ -500,8 +538,10 @@ def match_requirements(
                 )
             )
 
-        if matched_existing:
-            continue  # 既存項目で対応済みなら新規項目の要否は問わない
+        # ledger N-7: 完全新設の条文は、既存項目が要更新になっていても新規項目を必ず問う。
+        is_new_provision = change.kind == "追加"
+        if matched_existing and not is_new_provision:
+            continue
 
         prompt = _MATCH_NEW_ITEM_PROMPT.format(
             existing_labels=existing_labels,
@@ -513,11 +553,16 @@ def match_requirements(
         if store_conn is not None:
             store.record_from_llm_result(store_conn, run_id, "matching", result)
 
+        entry = None if result.get("timeout") else _extract_json_object(result["text"])
+
+        if is_new_provision:
+            impacts.append(_forced_new_item_impact(change, req.text, entry))
+            continue
+
         if result.get("timeout"):
             impacts.append(_undecidable_impact(change, None, "ローカルLLM呼び出しがタイムアウトしました"))
             continue
 
-        entry = _extract_json_object(result["text"])
         if not entry or not entry.get("needed"):
             continue
 
@@ -616,6 +661,10 @@ def _match_requirements_batched(
                 _undecidable_impact(change, item.label, "一括判定の呼び出しがタイムアウトしました")
                 for item in sitedoc.items
             )
+            # 新規項目の提案は条文の種別だけで決まる（LLMの応答を必要としない）ので、
+            # timeoutでも作れる。ここで作らないと、回線断のデモで落ちが消える。
+            if change.kind == "追加":
+                impacts.append(_forced_new_item_impact(change, req.text, None))
             continue
 
         payload = _extract_json_payload(result["text"])
@@ -652,11 +701,18 @@ def _match_requirements_batched(
                 )
             )
 
-        if matched_existing:
-            continue  # 既存項目で対応済みなら新規項目の要否は問わない（単発モードと同じ規則）
-
         new_item = (payload or {}).get("new_item")
-        if not isinstance(new_item, dict) or not new_item.get("needed"):
+        new_item = new_item if isinstance(new_item, dict) else None
+
+        # ledger N-7: 完全新設の条文は、LLMのneeded判定に関わらず新規項目の提案を作る。
+        if change.kind == "追加":
+            impacts.append(_forced_new_item_impact(change, req.text, new_item))
+            continue
+
+        if matched_existing:
+            continue  # 既存項目で対応済みなら新規項目は要らない（単発モードと同じ規則）
+
+        if new_item is None or not new_item.get("needed"):
             continue
         evidence = _verified_evidence(new_item, change)
         if evidence is None:

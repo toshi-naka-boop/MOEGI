@@ -131,6 +131,11 @@ class MatchRequirementsTest(unittest.TestCase):
         self.assertEqual(len(impacts[0].evidence), 1)
         self.assertGreaterEqual(impacts[0].evidence[0].offset, 0)
 
+    def _existing_item_impacts(self, impacts):
+        # self.change は完全新設なので、新規項目の提案は常に1件付く（ledger N-7）。
+        # 既存項目に対する判定だけを見たいテストではこちらを使う。
+        return [i for i in impacts if i.sitedoc_item_id is not None]
+
     def test_drops_impact_when_evidence_quote_not_found_in_notice_text(self):
         impacts = self._match(
             [
@@ -143,7 +148,9 @@ class MatchRequirementsTest(unittest.TestCase):
                 },
             ]
         )
-        self.assertEqual(impacts, [])
+        self.assertEqual(self._existing_item_impacts(impacts), [])
+        # 幻覚引用は根拠に採らず、条文冒頭へ差し替わること
+        self.assertNotIn("通達本文に存在しない引用文", impacts[0].evidence[0].quote)
 
     def test_drops_when_verdict_is_no_impact(self):
         impacts = self._match(
@@ -152,17 +159,17 @@ class MatchRequirementsTest(unittest.TestCase):
                 {"needed": False, "rationale": "新規項目も不要", "confidence": 0.6, "evidence_quote": ""},
             ]
         )
-        self.assertEqual(impacts, [])
+        self.assertEqual(self._existing_item_impacts(impacts), [])
 
     def test_ignores_malformed_response(self):
         adapter = _FakeAdapter({"matching": ["これはJSONではない出力です", '{"needed": false}']})
         impacts = pipeline.match_requirements(
             [self.requirement], {"c": self.change}, self.sitedoc, adapter, run_id="r"
         )
-        self.assertEqual(impacts, [])
+        self.assertEqual(self._existing_item_impacts(impacts), [])
 
-    def test_matches_existing_item_and_skips_new_item_check(self):
-        # 既存項目が「要更新」になった場合、新規項目の要否は問わない（キューに1件しか積まない）
+    def test_matches_existing_item_and_still_adds_new_item_for_new_provision(self):
+        # 完全新設では、既存項目が「要更新」になっても新規項目の提案が別に立つ（ledger N-7）
         impacts = self._match(
             [
                 {
@@ -170,11 +177,11 @@ class MatchRequirementsTest(unittest.TestCase):
                     "rationale": "評価と合わせて記録が必要",
                     "confidence": 0.7,
                     "evidence_quote": "目標達成の程度及びその効果等について評価を行う",
-                }
+                },
+                {"needed": False, "rationale": "不要", "confidence": 0.2, "evidence_quote": ""},
             ]
         )
-        self.assertEqual(len(impacts), 1)
-        self.assertEqual(impacts[0].sitedoc_item_id, "バイタルサインの記録")
+        self.assertEqual([i.sitedoc_item_id for i in impacts], ["バイタルサインの記録", None])
 
 
 class MatchRequirementsBatchedTest(unittest.TestCase):
@@ -210,6 +217,10 @@ class MatchRequirementsBatchedTest(unittest.TestCase):
             [self.requirement], {"c": self.change}, self.sitedoc, adapter, run_id="r"
         )
 
+    def _existing_item_impacts(self, impacts):
+        # self.change は完全新設なので新規項目の提案が常に1件付く（ledger N-7）
+        return [i for i in impacts if i.sitedoc_item_id is not None]
+
     def test_single_call_covers_all_items(self):
         impacts = self._match(
             {
@@ -227,9 +238,10 @@ class MatchRequirementsBatchedTest(unittest.TestCase):
             }
         )
         self.assertEqual(len(self.adapter.calls), 1)  # 2項目でも呼び出しは1回
-        self.assertEqual(len(impacts), 1)
-        self.assertEqual(impacts[0].sitedoc_item_id, "利用者の看護目標")
-        self.assertEqual(impacts[0].verdict, "要更新")
+        existing = self._existing_item_impacts(impacts)
+        self.assertEqual(len(existing), 1)
+        self.assertEqual(existing[0].sitedoc_item_id, "利用者の看護目標")
+        self.assertEqual(existing[0].verdict, "要更新")
 
     def test_missing_item_id_becomes_undecidable(self):
         # 承認条件1: 一括プロンプトで項目2の判定が返らなかったら「判定不能」として検知できること
@@ -241,20 +253,25 @@ class MatchRequirementsBatchedTest(unittest.TestCase):
                 "new_item": {"needed": False, "rationale": "x", "confidence": 0.1, "evidence_quote": ""},
             }
         )
-        self.assertEqual(len(impacts), 1)
-        self.assertEqual(impacts[0].verdict, "判定不能")
-        self.assertEqual(impacts[0].sitedoc_item_id, "利用者の看護目標")
+        existing = self._existing_item_impacts(impacts)
+        self.assertEqual(len(existing), 1)
+        self.assertEqual(existing[0].verdict, "判定不能")
+        self.assertEqual(existing[0].sitedoc_item_id, "利用者の看護目標")
 
     def test_malformed_response_marks_every_item_undecidable(self):
         impacts = self._match("これはJSONではない出力です")
-        self.assertEqual([i.verdict for i in impacts], ["判定不能", "判定不能"])
+        self.assertEqual([i.verdict for i in self._existing_item_impacts(impacts)], ["判定不能", "判定不能"])
 
-    def test_timeout_marks_every_item_undecidable(self):
+    def test_timeout_marks_every_item_undecidable_but_keeps_new_provision_proposal(self):
         adapter = _FakeAdapter({"matching": [_TIMEOUT]})
         impacts = pipeline._match_requirements_batched(
             [self.requirement], {"c": self.change}, self.sitedoc, adapter, run_id="r"
         )
-        self.assertEqual([i.verdict for i in impacts], ["判定不能", "判定不能"])
+        self.assertEqual([i.verdict for i in self._existing_item_impacts(impacts)], ["判定不能", "判定不能"])
+        # 完全新設の提案はLLM応答に依存しないので、timeoutでも残ること（回線断デモの落ち）
+        new_items = [i for i in impacts if i.sitedoc_item_id is None]
+        self.assertEqual(len(new_items), 1)
+        self.assertEqual(new_items[0].verdict, "要更新")
 
     def test_unverifiable_quote_is_dropped(self):
         impacts = self._match(
@@ -272,7 +289,7 @@ class MatchRequirementsBatchedTest(unittest.TestCase):
                 "new_item": {"needed": False, "rationale": "x", "confidence": 0.1, "evidence_quote": ""},
             }
         )
-        self.assertEqual(impacts, [])
+        self.assertEqual(self._existing_item_impacts(impacts), [])
 
     def test_creates_new_item_impact_when_no_existing_item_matches(self):
         impacts = self._match(
@@ -381,6 +398,128 @@ class ExtractJsonPayloadTest(unittest.TestCase):
 
     def test_returns_none_when_no_json(self):
         self.assertIsNone(pipeline._extract_json_payload("JSONではない出力"))
+
+
+class ForcedNewItemForNewProvisionTest(unittest.TestCase):
+    """ledger N-7（v11）: 完全新設の条文は新規項目の提案を必ず作る。"""
+
+    def setUp(self):
+        self.sitedoc = pipeline.SiteDoc(
+            id="s",
+            kind="チェックリスト",
+            title="t",
+            items=[pipeline.ChecklistItem(sitedoc_id="s", label="バイタルサインの記録", kind="自由記述")],
+        )
+        self.new_provision = pipeline.Change(
+            id="c",
+            old_section=None,  # 旧版に対応条文が無い＝完全新設
+            new_section=_section(
+                "第4の4",
+                "指定訪問看護の提供に当たっては、その目標達成の程度及びその効果等について評価を行うこと。",
+            ),
+            kind="追加",
+            summary="評価の記録が新設された",
+        )
+        self.requirement = pipeline.Requirement(change_id="c", text="目標達成の程度及びその効果を記録する")
+
+    def _new_item_impacts(self, impacts):
+        return [i for i in impacts if i.sitedoc_item_id is None]
+
+    def test_single_mode_creates_new_item_even_when_existing_item_matched(self):
+        # 既存項目が「要更新」になっても、完全新設なら新規項目の判定まで進むこと
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps(
+                        {
+                            "verdict": "要更新",
+                            "rationale": "過剰検出",
+                            "confidence": 0.7,
+                            "evidence_quote": "目標達成の程度及びその効果等について評価を行う",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    json.dumps({"needed": False, "rationale": "不要", "confidence": 0.2, "evidence_quote": ""}),
+                ]
+            }
+        )
+        impacts = pipeline.match_requirements(
+            [self.requirement], {"c": self.new_provision}, self.sitedoc, adapter, run_id="r"
+        )
+        new_items = self._new_item_impacts(impacts)
+        self.assertEqual(len(new_items), 1)
+        self.assertEqual(new_items[0].verdict, "要更新")
+        self.assertTrue(new_items[0].evidence)  # 根拠が無いと更新案が作られない
+
+    def test_single_mode_falls_back_to_notice_head_when_llm_gives_no_usable_quote(self):
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_quote": ""}),
+                    "これはJSONではない出力です",
+                ]
+            }
+        )
+        impacts = pipeline.match_requirements(
+            [self.requirement], {"c": self.new_provision}, self.sitedoc, adapter, run_id="r"
+        )
+        new_items = self._new_item_impacts(impacts)
+        self.assertEqual(len(new_items), 1)
+        # 根拠は条文冒頭。通達原文中に実在する文字列であること
+        quote = new_items[0].evidence[0].quote
+        self.assertIn(quote, self.new_provision.new_section.text)
+        self.assertEqual(new_items[0].rationale, self.requirement.text)
+
+    def test_batch_mode_creates_new_item_even_when_llm_says_not_needed(self):
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps(
+                        {
+                            "judgements": [
+                                {"item_id": "1", "verdict": "影響なし", "rationale": "x", "confidence": 0.8, "evidence_quote": ""}
+                            ],
+                            "new_item": {"needed": False, "rationale": "不要", "confidence": 0.2, "evidence_quote": ""},
+                        },
+                        ensure_ascii=False,
+                    )
+                ]
+            }
+        )
+        impacts = pipeline._match_requirements_batched(
+            [self.requirement], {"c": self.new_provision}, self.sitedoc, adapter, run_id="r"
+        )
+        new_items = self._new_item_impacts(impacts)
+        self.assertEqual(len(new_items), 1)
+        self.assertEqual(new_items[0].verdict, "要更新")
+
+    def test_revised_provision_still_skips_new_item_when_existing_matched(self):
+        # 改正（旧版に対応条文がある）では従来どおり、既存項目が拾えたら新規項目は問わない
+        revised = pipeline.Change(
+            id="d",
+            old_section=_section("第4の2", "旧版本文"),
+            new_section=_section("第4の2", "評価を行うこと。"),
+            kind="改正",
+        )
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps(
+                        {"verdict": "要更新", "rationale": "y", "confidence": 0.7, "evidence_quote": "評価を行う"},
+                        ensure_ascii=False,
+                    )
+                ]
+            }
+        )
+        impacts = pipeline.match_requirements(
+            [pipeline.Requirement(change_id="d", text="評価する")],
+            {"d": revised},
+            self.sitedoc,
+            adapter,
+            run_id="r",
+        )
+        self.assertEqual(len(adapter.calls), 1)  # 新規項目の追加呼び出しをしていない
+        self.assertEqual(self._new_item_impacts(impacts), [])
 
 
 class FindQuoteOffsetTest(unittest.TestCase):
@@ -493,10 +632,10 @@ class TimeoutHandlingTest(unittest.TestCase):
         impacts = pipeline.match_requirements(
             [requirement], {"c": self.change}, self.sitedoc, adapter, run_id="r"
         )
-        self.assertEqual(len(impacts), 1)
-        self.assertEqual(impacts[0].verdict, "判定不能")
-        self.assertEqual(impacts[0].sitedoc_item_id, "バイタルサインの記録")
-        self.assertEqual(impacts[0].evidence, [])
+        undecidable = [i for i in impacts if i.verdict == "判定不能"]
+        self.assertEqual(len(undecidable), 1)
+        self.assertEqual(undecidable[0].sitedoc_item_id, "バイタルサインの記録")
+        self.assertEqual(undecidable[0].evidence, [])
         # timeoutの後も次の呼び出し（新規項目判定）まで到達している
         self.assertEqual(len(adapter.calls), 2)
 
@@ -534,6 +673,8 @@ class RunLabelFilterTest(unittest.TestCase):
                 "diff": ["cの要約"],
                 "requirement": ["cの要件"],
                 "matching": [json.dumps({"needed": False, "rationale": "x", "confidence": 0.1, "evidence_quote": ""})],
+                # cは完全新設なので新規項目の提案が立ち、更新案生成まで到達する（ledger N-7）
+                "draft": [json.dumps({"drafts": [{"item_id": "1", "after": "評価欄を新設する。"}]}, ensure_ascii=False)],
             }
         )
         result = pipeline.run(
