@@ -1,0 +1,53 @@
+# MOEGI 架空事業所チェックリスト（design.md §9）
+#
+# 「◯◯訪問看護ステーション」— 実クライアントデータは一切使わず、
+# 厚労省の公開標準様式＋運営規程テンプレートをもとに構成した架空データ。
+# design.md §6.4 の SiteDoc / ChecklistItem に対応する。
+#
+# 意図的に「評価の記録」に相当する項目を含めていない
+# （design.md §2 のデモアンカー c=第4の4「評価の記録」は完全新設であり、
+#   このチェックリストに既存項目が無いことがデモの前提のため）。
+
+id = "oo-houmon-kango-station"
+kind = "チェックリスト"
+title = "訪問看護記録チェックリスト（◯◯訪問看護ステーション）"
+
+[[items]]
+label = "訪問開始・終了時刻の記録"
+kind = "自由記述"
+required = true
+
+[[items]]
+label = "指定訪問看護の実施に要した時間の記録"
+kind = "自由記述"
+required = true
+
+[[items]]
+label = "訪問日数・訪問頻度の記録"
+kind = "自由記述"
+required = true
+
+[[items]]
+label = "1回の訪問時間が標準（30分〜1時間30分）を下回る場合の理由記録"
+kind = "自由記述"
+required = false
+
+[[items]]
+label = "短時間訪問（20分以上30分未満）の実施記録"
+kind = "自由記述"
+required = false
+
+[[items]]
+label = "利用者の看護目標"
+kind = "自由記述"
+required = true
+
+[[items]]
+label = "バイタルサインの記録"
+kind = "自由記述"
+required = true
+
+[[items]]
+label = "特記事項"
+kind = "自由記述"
+required = false

@@ -1,0 +1,76 @@
+# MOEGI モデル設定（design.md §6.1・§6.3・§14）
+#
+# 接続情報は .env に置かない（CLAUDE.md の .env 禁止規約）。
+# APIキーの解決順は 環境変数 ORCA_API_KEY > macOSキーチェーン（service = "orca-api"）。
+# シェルのexport継承に依存しないので、起動経路が変わっても認証は切れない（ledger R-66）。
+# ORCA_BASE_URL は未設定なら https://api.orcarouter.ai/v1。末尾の /v1 の有無はどちらでもよい。
+#
+# dev_local_only = true の間は全工程がローカル（Ollama / 7shi/tanuki-dpo-v1.0）固定になる。
+# false にすればクラウド経路へ切り替わる（各工程の backend 指定は保持したまま ＝ design.md §6.1）。
+#
+# 注意: matching / draft は事業所文書がプロンプトに入る工程のため、
+# design.md §6.1「ルーティングの第一原則」によりローカル固定。
+# この2工程の backend に "orca" を指定すると llm.py の設定読み込みでエラーになる
+# （dev_local_only の値に関わらず、常にローカルへ拒否・固定される）。
+dev_local_only = true
+
+# design.md §7「投入単位と突合のバッチ化」(v11)。
+# true = 変更1件 × チェックリスト全項目を1プロンプトで一括判定。
+# false = 1項目=1呼び出しの単発モード。
+# ⚠️ 承認条件2により、一括を既定にしてよいのは D4 のゴールドセットで単発と一括の
+#    再現率を比較し、G9主指標が劣化しないことを確認してから。
+#    D2実測では一括は速い（27.9秒 vs 117.9秒）が検出0件だった（ledger R-65）ため、
+#    確認が済むまで既定は単発に置く。D4で判定したらこの1行を切り替える。
+batch_matching = false
+
+# 単価は ORCA の単価表どおり $/1M で書く。円換算は llm.py が
+# price_usd_per_1m_* × usd_jpy_rate ÷ 1000 で行う（design.md §6.3 の原価対比表もここに従う）。
+# ⚠️ 為替レートは前提（design.md §11・ledger R-62）。実勢と乖離したらこの1行を直す。
+usd_jpy_rate = 155.0
+
+[diff]
+# ②差分抽出（高頻度・軽処理）。候補モデルは未確定。
+# scripts/compare_models.py で1サンプルずつ比較してから確定する。
+backend = "orca"
+model = "anthropic/claude-haiku-4.5"  # 候補1（暫定・未確定）
+# 候補2: model = "google/gemini-3.6-flash"        # $1.50 / $7.50
+# 候補3: model = "deepseek/deepseek-v4-flash"     # $0.147 / $0.295
+# 候補4: model = "orcarouter/fusion"              # 従量課金・単価は選択先依存で事前に確定できない
+# 候補5: model = "orcarouter/auto"                # ⚠️ 未疎通。裸の "auto" は model_not_found。
+#                                                 # 名前空間付きは未試行（ledger R-64）
+fallback_backend = "local"
+fallback_model = "7shi/tanuki-dpo-v1.0:latest"
+price_usd_per_1m_in = 1.00
+price_usd_per_1m_out = 5.00
+
+[requirement]
+# ③-a 要件抽出（高精度枠）。通達本文のみが入るため公開情報しか流れない＝クラウドで堂々と使える。
+backend = "orca"
+model = "anthropic/claude-sonnet-5"
+# 最終ゴールデン実行時はここを切り替える:
+# model = "anthropic/claude-opus-5"   # $5.00 / $25.00
+fallback_backend = "local"
+fallback_model = "7shi/tanuki-dpo-v1.0:latest"
+price_usd_per_1m_in = 2.00
+price_usd_per_1m_out = 10.00
+
+[matching]
+# ③-b 突合。事業所文書（チェックリスト）が入るため設計上ローカル固定（design.md §6.1）。
+# backend を "orca" に変更することはできない（llm.py が拒否する）。
+backend = "local"
+model = "7shi/tanuki-dpo-v1.0:latest"
+# 一括判定は「全項目ぶんのJSON」を1回で吐かせるため、単発時より出力が長く時間もかかる。
+# 上限を切りすぎるとJSONが途中で切れて全項目が判定不能になるので、項目数×約80トークンを目安に置く。
+max_output_tokens = 900
+local_timeout_seconds = 120.0
+
+[draft]
+# ④更新案生成。事業所文書の文体に合わせた書き換えのため設計上ローカル固定（design.md §6.1）。
+# backend を "orca" に変更することはできない（llm.py が拒否する）。
+backend = "local"
+model = "7shi/tanuki-dpo-v1.0:latest"
+# design.md §6.6（v10）: D2実測でdraftが最も長く、唯一ローカルtimeout（60秒）を
+# 超えた工程だった。出力は「更新後の項目文言を1〜2文」で足りるため上限を設ける。
+# 一括モードでは要更新と判定された項目ぶんをまとめて生成するため、単発の200では足りない。
+max_output_tokens = 700
+local_timeout_seconds = 120.0
