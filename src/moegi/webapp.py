@@ -72,6 +72,8 @@ _PAGE_STYLE = """
   .actions form { display: inline; margin-right: 0.5rem; }
   button { cursor: pointer; }
   .run-list a { display: block; margin: 0.3rem 0; }
+  .run-warning { background: #fdecea; border: 1px solid #c0392b; border-radius: 6px; padding: 0.6rem 1rem; font-size: 0.9rem; }
+  button:disabled { opacity: 0.6; cursor: wait; }
 </style>
 """
 
@@ -111,10 +113,18 @@ def index() -> HTMLResponse:
         else "<p>まだ分析結果がありません。下のフォームから実行してください。</p>"
     )
 
+    # 実機で確認済み: 単発モードのローカルLLM実行は項目により1〜4分かかる（design.md §6.2）。
+    # 進行表示が無いと固まって見え「落ちた」と誤認されるため、送信後にボタンを無効化して
+    # 実行中である旨を明示する（素のJS・CDN依存なし＝design.md §14）。
     body = f"""
     <h1>MOEGI 承認UI</h1>
     <h2>新しい分析を実行</h2>
-    <form method="post" action="/runs">
+    <p class="run-warning">⚠️ ローカルLLMで実行するため<strong>1〜4分程度かかります</strong>。
+    実行中はこのタブを閉じずにお待ちください（フリーズしたように見えますが処理中です）。</p>
+    <form method="post" action="/runs" onsubmit="
+      this.querySelector('button').disabled = true;
+      this.querySelector('button').textContent = '実行中…（1〜4分。閉じずにお待ちください）';
+    ">
       <label>対象条文（allowlistラベル）:
         <select name="label">{label_options}</select>
       </label>
