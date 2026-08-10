@@ -153,9 +153,14 @@ _PAGE_STYLE = """
   summary { cursor: pointer; font-size: 0.85rem; color: var(--moegi-deep); font-weight: 600; }
   .trace-text { white-space: pre-wrap; background: var(--paper); border: 1px solid var(--line); padding: 0.6rem 0.7rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.3rem; }
 
-  .actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; align-items: flex-start; }
-  .actions form { display: flex; gap: 0.4rem; align-items: flex-start; }
-  textarea { font: inherit; font-size: 0.85rem; padding: 0.4rem; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); resize: vertical; }
+  .actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; }
+  .edit-form { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.9rem; }
+  .edit-form .field-label { margin: 0; }
+  .edit-form button { align-self: flex-start; }
+  textarea {
+    width: 100%; font: inherit; font-size: 0.9rem; line-height: 1.5; padding: 0.6rem 0.7rem;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); resize: vertical;
+  }
 
   @media (max-width: 600px) {
     .diff { grid-template-columns: 1fr; }
@@ -319,11 +324,12 @@ def _proposal_html(row: dict) -> str:
       <div class="actions">
         <form method="post" action="/proposals/{row_id}/approve"><button type="submit">承認</button></form>
         <form method="post" action="/proposals/{row_id}/reject"><button type="submit">却下</button></form>
-        <form method="post" action="/proposals/{row_id}/edit">
-          <textarea name="after" rows="2" cols="40">{after}</textarea>
-          <button type="submit">編集して保存</button>
-        </form>
       </div>
+      <form class="edit-form" method="post" action="/proposals/{row_id}/edit">
+        <label class="field-label" for="after-{row_id}">文言を編集</label>
+        <textarea id="after-{row_id}" name="after" rows="4">{after}</textarea>
+        <button type="submit">編集して保存</button>
+      </form>
     </div>
     """
 
