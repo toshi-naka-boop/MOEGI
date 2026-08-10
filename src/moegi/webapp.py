@@ -224,10 +224,12 @@ def index() -> HTMLResponse:
     body = f"""
     <h1>MOEGI 承認UI</h1>
     <h2>新しい分析を実行</h2>
-    <p class="run-warning">⚠️ ローカルLLMで実行するため<strong>1〜4分程度</strong>かかります。実行中はタブを閉じずにお待ちください。</p>
+    <p class="run-warning">⚠️ クラウドLLM（ORCA）を使うため<strong>1分弱</strong>かかります（実測47秒・N-11以降）。
+    クラウド呼び出しが失敗した場合のみローカルへ自動フォールバックし、その場合は数分かかります。
+    実行中はタブを閉じずにお待ちください。</p>
     <form class="run-form" method="post" action="/runs" onsubmit="
       this.querySelector('button').disabled = true;
-      this.querySelector('button').textContent = '実行中…（1〜4分）';
+      this.querySelector('button').textContent = '実行中…';
     ">
       <label for="label-select">対象条文</label>
       <select id="label-select" name="label">{label_options}</select>
