@@ -5,14 +5,15 @@
 # シェルのexport継承に依存しないので、起動経路が変わっても認証は切れない（ledger R-66）。
 # ORCA_BASE_URL は未設定なら https://api.orcarouter.ai/v1。末尾の /v1 の有無はどちらでもよい。
 #
-# dev_local_only = true の間は全工程がローカル（Ollama / 7shi/tanuki-dpo-v1.0）固定になる。
-# false にすればクラウド経路へ切り替わる（各工程の backend 指定は保持したまま ＝ design.md §6.1）。
+# dev_local_only = true にすると全工程がローカル（Ollama）固定になる（デバッグ用）。
+# 既定は false＝クラウド経路（design.md §6.1・v13・ledger N-11）。
 #
-# 注意: matching / draft は事業所文書がプロンプトに入る工程のため、
-# design.md §6.1「ルーティングの第一原則」によりローカル固定。
-# この2工程の backend に "orca" を指定すると llm.py の設定読み込みでエラーになる
-# （dev_local_only の値に関わらず、常にローカルへ拒否・固定される）。
-dev_local_only = true
+# ローカル固定が必要なのは要配慮個人情報（患者の医療・看護情報）を扱う工程だけ
+# （§6.1「ルーティングの第一原則」v13）。SiteDoc/ChecklistItemは項目ラベルの
+# テンプレート定義であり患者データを含まないため、matching/draftも他の工程と同じく
+# クラウドが既定。ローカル固定が必要なのは日報エージェント（transcribe/structure・
+# 未実装）だけで、そちらはこのモデル設定を経由しない別系統になる予定（ledger N-11）。
+dev_local_only = false
 
 # design.md §7「投入単位と突合のバッチ化」(v11)。
 # true = 変更1件 × チェックリスト全項目を1プロンプトで一括判定。
@@ -55,20 +56,32 @@ price_usd_per_1m_in = 2.00
 price_usd_per_1m_out = 10.00
 
 [matching]
-# ③-b 突合。事業所文書（チェックリスト）が入るため設計上ローカル固定（design.md §6.1）。
-# backend を "orca" に変更することはできない（llm.py が拒否する）。
-backend = "local"
-model = "7shi/tanuki-dpo-v1.0:latest"
+# ③-b 突合（v13・ledger N-11でクラウド解禁）。入力は要件文＋通達原文の抜粋＋
+# チェックリスト項目ラベルのみで、要配慮個人情報を含まない（pipeline.py は
+# ChecklistItem.label/kind しかプロンプトに渡さない。goal_ref等は渡さないことを
+# テストで固定している＝tests/test_pipeline.py の goal_ref 非流出テスト）。
+# ローカル7Bモデルでの実測がN-8（過剰検出）・N-9（低再現率）・N-10（逐語引用の崩れ）の
+# 主因だったため、③-aと同格の高精度モデルに上げる。
+backend = "orca"
+model = "anthropic/claude-sonnet-5"
+fallback_backend = "local"
+fallback_model = "7shi/tanuki-dpo-v1.0:latest"
+price_usd_per_1m_in = 2.00
+price_usd_per_1m_out = 10.00
 # 一括判定は「全項目ぶんのJSON」を1回で吐かせるため、単発時より出力が長く時間もかかる。
 # 上限を切りすぎるとJSONが途中で切れて全項目が判定不能になるので、項目数×約80トークンを目安に置く。
 max_output_tokens = 900
 local_timeout_seconds = 120.0
 
 [draft]
-# ④更新案生成。事業所文書の文体に合わせた書き換えのため設計上ローカル固定（design.md §6.1）。
-# backend を "orca" に変更することはできない（llm.py が拒否する）。
-backend = "local"
-model = "7shi/tanuki-dpo-v1.0:latest"
+# ④更新案生成（v13・ledger N-11でクラウド解禁）。入力はimpact.rationale・evidence・
+# チェックリスト項目ラベルのみで、matchingと同じ理由で要配慮個人情報を含まない。
+backend = "orca"
+model = "anthropic/claude-haiku-4.5"
+fallback_backend = "local"
+fallback_model = "7shi/tanuki-dpo-v1.0:latest"
+price_usd_per_1m_in = 1.00
+price_usd_per_1m_out = 5.00
 # design.md §6.6（v10）: D2実測でdraftが最も長く、唯一ローカルtimeout（60秒）を
 # 超えた工程だった。出力は「更新後の項目文言を1〜2文」で足りるため上限を設ける。
 # 一括モードでは要更新と判定された項目ぶんをまとめて生成するため、単発の200では足りない。

@@ -4,5 +4,6 @@
   "false_positive_rate": 0.143,
   "measured_at": "2026-08-10",
   "goldset": "config/goldset.toml",
-  "note": "ledger N-10適用後の実測。既定モード（batch_matching=false・dev_local_only=true）での値。承認UIの常時表示に使う（design.md G9-b）"
+  "stale": true,
+  "note": "ledger N-10適用後の実測。ただしN-11（2026-08-11）で③-b突合のクラウド既定化により、この数値が測定した構成（dev_local_only=true・全工程ローカル）はもう既定ではない。新既定（③-bクラウド・claude-sonnet-5）でのG9再測定はD5の課題（design.md §10）。stale=trueの間、承認UIはこの数値を「現在の既定の実測値」として提示しない"
 }

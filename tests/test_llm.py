@@ -18,7 +18,6 @@ import httpx
 from moegi import llm
 from moegi.llm import (
     CIRCUIT_BREAKER_THRESHOLD,
-    ConfigError,
     LLMAdapter,
     load_model_config,
 )
@@ -110,19 +109,20 @@ class LoadModelConfigTest(unittest.TestCase):
             self.assertEqual(cfg["stages"]["diff"].model, "candidate-a")
             self.assertEqual(cfg["stages"]["matching"].backend, "local")
 
-    def test_rejects_orca_backend_for_matching(self):
-        bad = VALID_CONFIG.replace('[matching]\nbackend = "local"', '[matching]\nbackend = "orca"')
+    def test_accepts_orca_backend_for_matching_and_draft(self):
+        # v13・ledger N-11: matching/draftはSiteDoc（項目ラベルのみ・要配慮個人情報を含まない）
+        # しか扱わないためLOCAL_ONLY_STAGESから外れ、他の工程と同じくorcaを設定できる。
+        cloud = VALID_CONFIG.replace('[matching]\nbackend = "local"\nmodel = "tanuki"',
+                                      '[matching]\nbackend = "orca"\nmodel = "sonnet"\n'
+                                      'fallback_backend = "local"\nfallback_model = "tanuki"')
+        cloud = cloud.replace('[draft]\nbackend = "local"\nmodel = "tanuki"',
+                               '[draft]\nbackend = "orca"\nmodel = "haiku"\n'
+                               'fallback_backend = "local"\nfallback_model = "tanuki"')
         with tempfile.TemporaryDirectory() as tmp:
-            path = _write_toml(Path(tmp), bad)
-            with self.assertRaises(ConfigError):
-                load_model_config(path)
-
-    def test_rejects_orca_backend_for_draft(self):
-        bad = VALID_CONFIG.replace('[draft]\nbackend = "local"', '[draft]\nbackend = "orca"')
-        with tempfile.TemporaryDirectory() as tmp:
-            path = _write_toml(Path(tmp), bad)
-            with self.assertRaises(ConfigError):
-                load_model_config(path)
+            path = _write_toml(Path(tmp), cloud)
+            cfg = load_model_config(path)  # 例外を上げないことそのものがテスト
+            self.assertEqual(cfg["stages"]["matching"].backend, "orca")
+            self.assertEqual(cfg["stages"]["draft"].backend, "orca")
 
 
 class AdapterRoutingTest(unittest.TestCase):
@@ -148,8 +148,10 @@ class AdapterRoutingTest(unittest.TestCase):
         adapter = LLMAdapter(config_path=path, http_client=client)
         return adapter, client
 
-    def test_matching_stage_is_always_local_even_when_backend_config_says_orca_would_be_desired(self):
-        # 第一原則: matching/draftはdev_local_onlyの値に関わらず常にローカル。
+    def test_matching_routes_local_when_configured_local(self):
+        # VALID_CONFIGの既定（backend="local"）どおりに動くこと自体は変わらない。
+        # 「常にローカル」という第一原則の強制がLOCAL_ONLY_STAGESの空集合化で外れたことは
+        # 下のtest_matching_routes_to_orca_when_configured_as_orcaで検証する。
         adapter, client = self._make_adapter()
         result = adapter.complete("matching", "prompt")
         self.assertEqual(result["backend"], "local:tanuki")
@@ -157,7 +159,23 @@ class AdapterRoutingTest(unittest.TestCase):
         self.assertEqual(result["fallback_level"], 0)
         self.assertTrue(all("fake-orca" not in c for c in client.calls))
 
-    def test_draft_stage_is_always_local(self):
+    def test_matching_routes_to_orca_when_configured_as_orca(self):
+        # v13・ledger N-11の核: matching/draftはもはや強制ローカルではない。
+        # backend="orca"を設定すれば、diff/requirementと同じくクラウドへ実際に到達する。
+        config = VALID_CONFIG.replace(
+            '[matching]\nbackend = "local"\nmodel = "tanuki"',
+            '[matching]\nbackend = "orca"\nmodel = "candidate-a"\n'
+            'fallback_backend = "local"\nfallback_model = "tanuki"',
+        )
+        adapter, client = self._make_adapter(
+            config_text=config, env={"ORCA_BASE_URL": "http://fake-orca", "ORCA_API_KEY": "k"}
+        )
+        client.orca_queue.append(_FakeResponse(_chat_response_body("クラウド応答")))
+        result = adapter.complete("matching", "prompt")
+        self.assertEqual(result["backend"], "orca:candidate-a")
+        self.assertFalse(result["degraded"])
+
+    def test_draft_stage_is_local_when_configured_local(self):
         adapter, client = self._make_adapter()
         result = adapter.complete("draft", "prompt")
         self.assertEqual(result["backend"], "local:tanuki")

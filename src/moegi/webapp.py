@@ -43,6 +43,18 @@ def _g9_badge_html() -> str:
         data = json.loads(_G9_LATEST_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return '<div class="g9-bar g9-bar--missing">AI検出精度: 実測データが見つかりません</div>'
+
+    if data.get("stale"):
+        # ledger N-11: ③-b突合がクラウド既定になり、この数値を測定した構成
+        # （全工程ローカル）はもう既定ではない。古い数値を「現在の既定」として
+        # 見せるとG9-bの趣旨（実測を偽らず開示する）に反するため、明示的に保留と示す。
+        return f"""
+        <div class="g9-bar g9-bar--missing">
+          <span class="g9-label">AI検出精度: 新既定（クラウド突合）での再測定待ち</span>
+          <span class="g9-note">前回実測（{html.escape(data['measured_at'])}・{html.escape(data['mode'])}構成）は既定変更（N-11）により無効。measured_atが更新されるまで数値は表示しません</span>
+        </div>
+        """
+
     recall_pct = f"{data['recall'] * 100:.1f}%"
     fpr_pct = f"{data['false_positive_rate'] * 100:.1f}%"
     return f"""

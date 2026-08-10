@@ -769,6 +769,90 @@ class RunLabelFilterTest(unittest.TestCase):
         self.assertEqual(result["changes"][0].id, "c")
 
 
+class GoalRefDoesNotLeakToPromptsTest(unittest.TestCase):
+    """ledger N-11・opus批評C-12: matching/draftがクラウドへ出るようになったため、
+    ChecklistItem.goal_ref（患者の看護目標＝要配慮個人情報になり得る）が
+    プロンプトに一切混入しないことを構造的に固定する回帰テスト。
+
+    §6.1 v13の「要配慮個人情報を含むか ✗」という前提は、goal_refがプロンプトに
+    渡らないことに依存している。この前提が実装の偶然のままにならないよう、
+    goal_refを設定した項目でも漏れないことをテストで担保する。
+    """
+
+    def setUp(self):
+        self.sensitive_goal_ref = "患者Xは末期がんで在宅緩和ケア継続を希望している"
+        self.sitedoc = pipeline.SiteDoc(
+            id="s",
+            kind="チェックリスト",
+            title="t",
+            items=[
+                pipeline.ChecklistItem(
+                    sitedoc_id="s",
+                    label="利用者の看護目標",
+                    kind="自由記述",
+                    goal_ref=self.sensitive_goal_ref,
+                )
+            ],
+        )
+        self.change = pipeline.Change(
+            id="c",
+            old_section=None,
+            new_section=_section("第4の4", "評価を行うこと。"),
+            kind="追加",
+        )
+        self.requirement = pipeline.Requirement(change_id="c", text="評価を記録する")
+
+    def test_single_mode_match_prompt_excludes_goal_ref(self):
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                ]
+            }
+        )
+        pipeline.match_requirements([self.requirement], {"c": self.change}, self.sitedoc, adapter, run_id="r")
+        for _, prompt in adapter.calls:
+            self.assertNotIn(self.sensitive_goal_ref, prompt)
+
+    def test_batch_mode_match_prompt_excludes_goal_ref(self):
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps(
+                        {
+                            "judgements": [
+                                {"item_id": "1", "verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}
+                            ],
+                            "new_item": {"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""},
+                        },
+                        ensure_ascii=False,
+                    )
+                ]
+            }
+        )
+        pipeline._match_requirements_batched(
+            [self.requirement], {"c": self.change}, self.sitedoc, adapter, run_id="r"
+        )
+        for _, prompt in adapter.calls:
+            self.assertNotIn(self.sensitive_goal_ref, prompt)
+
+    def test_draft_prompt_excludes_goal_ref(self):
+        impact = pipeline.Impact(
+            id="impact-c-利用者の看護目標",
+            change_id="c",
+            sitedoc_item_id="利用者の看護目標",
+            verdict="要更新",
+            rationale="評価が必要",
+            confidence=0.9,
+            evidence=[pipeline.Evidence(notice_section_path="第4の4", quote="評価を行うこと。", offset=0)],
+        )
+        adapter = _FakeAdapter({"draft": ["更新後の文言"]})
+        pipeline.draft_proposals([impact], self.sitedoc, adapter, run_id="r")
+        for _, prompt in adapter.calls:
+            self.assertNotIn(self.sensitive_goal_ref, prompt)
+
+
 class LoadSitedocTest(unittest.TestCase):
     def test_loads_sample_sitedoc(self):
         sitedoc = pipeline.load_sitedoc()

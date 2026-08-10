@@ -16,9 +16,11 @@
     ORCA_API_KEY  — 未設定なら macOSキーチェーン（service=KEYCHAIN_SERVICE）から取得する。
                     キー本文はログ・例外メッセージ・戻り値のどこにも出さない
 
-design.md §6.1「ルーティングの第一原則」:
-    事業所文書（SiteDoc）がプロンプトに入る工程（matching / draft）は、
-    設定に関わらずローカル固定。設定でクラウドを指定されても拒否する。
+design.md §6.1「ルーティングの第一原則」（v13・ledger N-11）:
+    要配慮個人情報（患者の医療・看護情報）を扱う工程は、設定に関わらずローカル固定
+    （LOCAL_ONLY_STAGESで指定。現状は空——matching/draftはSiteDoc/ChecklistItemの
+    項目ラベルしか扱わず要配慮個人情報を含まないためクラウド既定に変更した）。
+    設定でクラウドを指定されても拒否するのは LOCAL_ONLY_STAGES に載っている工程だけ。
 
 design.md §6.6「障害時の状態遷移」:
     - 各クラウド呼び出しにtimeout（実測の3倍・上限20秒）。超過で即ローカルへフォールバック
@@ -43,8 +45,13 @@ import httpx
 
 STAGES = ("diff", "requirement", "matching", "draft")
 
-# design.md §6.1 第一原則: 事業所文書がプロンプトに入る工程は設定に関わらずローカル固定。
-LOCAL_ONLY_STAGES = frozenset({"matching", "draft"})
+# design.md §6.1 第一原則（v13・ledger N-11）: ローカル固定が必要なのは要配慮個人情報
+# （患者の医療・看護情報）を扱う工程だけ。SiteDoc/ChecklistItemは項目ラベルのテンプレート
+# 定義であり患者データを含まないため、matching/draftは他のクラウド工程と同じ扱いにする
+# （v12までは事業所文書の有無だけでこの2工程を強制ローカルにしていたが、その制約は廃止）。
+# 現状LOCAL_ONLY_STAGESは空集合。将来、日報エージェント（transcribe/structure）を
+# このアダプタ経由にする場合は、そちらを追加する（常に要配慮個人情報を扱うため）。
+LOCAL_ONLY_STAGES: frozenset[str] = frozenset()
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = _REPO_ROOT / "config" / "models.toml"
@@ -94,7 +101,7 @@ class StageConfig:
 
 
 def load_model_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
-    """config/models.toml を読み込む。matching/draftにorcaが指定されていたら拒否する。
+    """config/models.toml を読み込む。LOCAL_ONLY_STAGESの工程にorcaが指定されていたら拒否する。
 
     単価は ORCA の単価表どおり $/1M で書き、円/1k への換算はここ1箇所で行う
     （usd_jpy_rate は前提。変えれば §6.3 の原価対比表がまとめて追従する）。
@@ -128,7 +135,7 @@ def load_model_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
         )
         if stage in LOCAL_ONLY_STAGES and cfg.backend != "local":
             raise ConfigError(
-                f'[{stage}] は事業所文書を含む工程のため設計上ローカル固定です（design.md §6.1）。'
+                f'[{stage}] は要配慮個人情報を含む工程のため設計上ローカル固定です（design.md §6.1 v13）。'
                 f' backend = "{cfg.backend}" は設定できません。'
             )
         stages[stage] = cfg
@@ -237,13 +244,13 @@ class LLMAdapter:
         if stage_cfg.local_timeout_seconds is not None and "local_timeout" not in opts:
             opts = {**opts, "local_timeout": stage_cfg.local_timeout_seconds}
 
-        # 第一原則: matching/draft、またはdev_local_only中、または設定自体がlocalなら常にローカル。
+        # 第一原則: LOCAL_ONLY_STAGES所属、またはdev_local_only中、または設定自体がlocalなら常にローカル。
         # ここでは「設定を信用せず毎回判定する」ことが重要（第一原則を実装で守るため）。
         if stage in LOCAL_ONLY_STAGES or self._dev_local_only or stage_cfg.backend == "local":
             model = stage_cfg.model if stage_cfg.backend == "local" else stage_cfg.fallback_model
             return self._call_local(model, prompt, opts, degraded=False, fallback_level=0)
 
-        # ここに来るのはdiff/requirementで、backend="orca"かつdev_local_only=falseの場合のみ。
+        # ここに来るのはbackend="orca"かつdev_local_only=falseの場合（既定では全工程）。
         if self._breaker_is_open():
             return self._call_local(
                 stage_cfg.fallback_model, prompt, opts, degraded=True, fallback_level=2
@@ -267,7 +274,7 @@ class LLMAdapter:
         """backend/modelを直接指定して呼び出す（stageルーティングを経由しない）。
 
         scripts/compare_models.py のような候補モデル比較用途に限定して使うこと。
-        design.md §6.1の第一原則（matching/draftのローカル固定）はstage単位の制約なので、
+        design.md §6.1の第一原則（LOCAL_ONLY_STAGESのローカル固定）はstage単位の制約なので、
         ここでは適用対象外（呼び出し元が明示的にbackendを選ぶ）。
         """
         opts = opts or {}
