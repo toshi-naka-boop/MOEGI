@@ -33,47 +33,134 @@ def _db_conn():
 
 
 def _g9_badge_html() -> str:
-    """design.md G9-b: 再現率の実測値を常時表示する（承認UIのどのページにも出す）。"""
+    """design.md G9-b: 再現率の実測値を常時表示する（承認UIのどのページにも出す）。
+
+    数値目標を置かず「開示すること」自体が合格条件（design.md §3 G9-b）。
+    ただし常時表示するものが長文だとかえって読まれなくなるため、数値2つを
+    チップで見せ、注記は補足として1行に圧縮する（ユーザー指摘: くどい・殺風景）。
+    """
     try:
         data = json.loads(_G9_LATEST_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return '<p class="g9-badge g9-badge--missing">AI検出の再現率: 実測データが見つかりません</p>'
+        return '<div class="g9-bar g9-bar--missing">AI検出精度: 実測データが見つかりません</div>'
     recall_pct = f"{data['recall'] * 100:.1f}%"
     fpr_pct = f"{data['false_positive_rate'] * 100:.1f}%"
-    return (
-        '<p class="g9-badge">'
-        f"AI検出の再現率（実測・{html.escape(data['mode'])}）: <strong>{recall_pct}</strong>"
-        f"　／　誤検出率: <strong>{fpr_pct}</strong>"
-        f"　（{html.escape(data['measured_at'])}計測・ゴールドセットに対する実測値。"
-        "精度は100%ではありません。だから人間の承認を必ず挟みます）"
-        "</p>"
-    )
+    return f"""
+    <div class="g9-bar">
+      <span class="g9-label">AI検出精度（実測・{html.escape(data['mode'])}）</span>
+      <span class="g9-stat">再現率 <strong>{recall_pct}</strong></span>
+      <span class="g9-stat">誤検出率 <strong>{fpr_pct}</strong></span>
+      <span class="g9-note">{html.escape(data['measured_at'])}計測・だから承認は必ず人が行います</span>
+    </div>
+    """
 
 
 _PAGE_STYLE = """
 <style>
-  body { font-family: -apple-system, "Hiragino Sans", sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
-  h1 { font-size: 1.4rem; }
-  .g9-badge { background: #fff3cd; border: 1px solid #d9a441; border-radius: 6px; padding: 0.6rem 1rem; font-size: 0.9rem; }
-  .g9-badge--missing { background: #f8d7da; border-color: #c0392b; }
-  .proposal { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
-  .proposal[data-status="承認"] { border-color: #2e7d32; background: #f1f8f1; }
-  .proposal[data-status="却下"] { border-color: #999; background: #f5f5f5; opacity: 0.7; }
-  .proposal[data-status="編集済"] { border-color: #1565c0; background: #eef4fc; }
-  .meta { color: #555; font-size: 0.85rem; }
-  .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.8rem; background: #eee; }
-  .verdict-要更新 { background: #ffe0b2; }
-  .diff { display: flex; gap: 1rem; margin: 0.5rem 0; }
-  .diff > div { flex: 1; background: #fafafa; padding: 0.5rem; border-radius: 4px; }
-  .diff .before { color: #888; }
+  :root {
+    --ink: #1c1f1a;
+    --ink-soft: #565f4f;
+    --paper: #fbfaf5;
+    --paper-raised: #ffffff;
+    --line: #dde0d2;
+    --moegi: #7a9c2e;
+    --moegi-soft: #eef3e1;
+    --moegi-deep: #55701f;
+    --warn: #a8641b;
+    --warn-soft: #fbf1e2;
+    --danger: #a8391f;
+    --status-approved: #3f7d3a;
+    --status-approved-bg: #eef6ea;
+    --status-rejected: #7a7f70;
+    --status-rejected-bg: #f1f1ec;
+    --status-edited: #3a5f8a;
+    --status-edited-bg: #eaf1f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eceee6; --ink-soft: #b4bba8; --paper: #191c15; --paper-raised: #22261c;
+      --line: #363c2c; --moegi: #9bc24e; --moegi-soft: #26301a; --moegi-deep: #b9de77;
+      --warn: #dba15a; --warn-soft: #2c2416; --danger: #d97f63;
+      --status-approved: #7fc17a; --status-approved-bg: #1c2a1a;
+      --status-rejected: #9aa08d; --status-rejected-bg: #24261e;
+      --status-edited: #7fabde; --status-edited-bg: #182535;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
+    max-width: 880px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem;
+    background: var(--paper); color: var(--ink); line-height: 1.7;
+  }
+  h1 { font-size: 1.5rem; letter-spacing: 0.01em; margin: 1.75rem 0 0.75rem; text-wrap: balance; }
+  h2 { font-size: 1.05rem; color: var(--ink-soft); font-weight: 600; margin: 2rem 0 0.75rem; }
+  a { color: var(--moegi-deep); }
+
+  .g9-bar {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 1rem;
+    background: var(--moegi-soft); border-bottom: 3px solid var(--moegi);
+    padding: 0.6rem 1rem; font-size: 0.85rem; margin: 0 -1.25rem 1rem;
+  }
+  .g9-bar--missing { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+  .g9-label { font-weight: 600; color: var(--moegi-deep); }
+  .g9-stat strong { font-variant-numeric: tabular-nums; font-size: 1rem; }
+  .g9-note { color: var(--ink-soft); margin-left: auto; }
+
+  .run-warning {
+    background: var(--warn-soft); border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0;
+    padding: 0.6rem 0.9rem; font-size: 0.85rem; color: var(--ink);
+  }
+  .run-form { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.75rem; flex-wrap: wrap; }
+  select { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--paper-raised); color: var(--ink); }
+
+  button {
+    cursor: pointer; font: inherit; font-weight: 600; border: none; border-radius: 6px;
+    padding: 0.45rem 1rem; background: var(--moegi); color: #10240a;
+  }
+  button:hover { background: var(--moegi-deep); color: #fff; }
+  button:disabled { opacity: 0.55; cursor: wait; }
+  .actions button { background: var(--paper-raised); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+  .actions button:hover { background: var(--moegi-soft); color: var(--ink); }
+
+  .run-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+  .run-list a { font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+
+  .proposal {
+    border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 8px;
+    padding: 1rem 1.1rem; margin: 1rem 0; background: var(--paper-raised);
+  }
+  .proposal[data-status="承認"] { border-left-color: var(--status-approved); }
+  .proposal[data-status="却下"] { border-left-color: var(--status-rejected); opacity: 0.65; }
+  .proposal[data-status="編集済"] { border-left-color: var(--status-edited); }
+
+  .meta { color: var(--ink-soft); font-size: 0.82rem; margin: 0 0 0.4rem; }
+  .chips { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.5rem; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; padding: 0.15rem 0.55rem; border-radius: 99px; font-size: 0.78rem; font-weight: 600; background: var(--moegi-soft); color: var(--moegi-deep); }
+  .status-chip { background: var(--status-rejected-bg); color: var(--status-rejected); }
+  .proposal[data-status="承認"] .status-chip { background: var(--status-approved-bg); color: var(--status-approved); }
+  .proposal[data-status="編集済"] .status-chip { background: var(--status-edited-bg); color: var(--status-edited); }
+  .confidence { color: var(--ink-soft); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+
+  .rationale { font-size: 0.92rem; color: var(--ink-soft); margin: 0.5rem 0; }
+  .diff { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 0.6rem 0; }
+  .diff > div { background: var(--paper); border: 1px solid var(--line); padding: 0.6rem 0.7rem; border-radius: 6px; font-size: 0.88rem; }
+  .diff .field-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); margin-bottom: 0.25rem; }
+  .diff .before { color: var(--ink-soft); }
   .diff .after { font-weight: 600; }
-  mark { background: #fff59d; }
-  .trace-text { white-space: pre-wrap; background: #fafafa; padding: 0.5rem; border-radius: 4px; font-size: 0.9rem; }
-  .actions form { display: inline; margin-right: 0.5rem; }
-  button { cursor: pointer; }
-  .run-list a { display: block; margin: 0.3rem 0; }
-  .run-warning { background: #fdecea; border: 1px solid #c0392b; border-radius: 6px; padding: 0.6rem 1rem; font-size: 0.9rem; }
-  button:disabled { opacity: 0.6; cursor: wait; }
+  mark { background: #f4e08a; color: #1c1f1a; border-radius: 2px; padding: 0 0.1em; }
+
+  details { margin: 0.6rem 0; }
+  summary { cursor: pointer; font-size: 0.85rem; color: var(--moegi-deep); font-weight: 600; }
+  .trace-text { white-space: pre-wrap; background: var(--paper); border: 1px solid var(--line); padding: 0.6rem 0.7rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.3rem; }
+
+  .actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; align-items: flex-start; }
+  .actions form { display: flex; gap: 0.4rem; align-items: flex-start; }
+  textarea { font: inherit; font-size: 0.85rem; padding: 0.4rem; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); resize: vertical; }
+
+  @media (max-width: 600px) {
+    .diff { grid-template-columns: 1fr; }
+    .g9-bar { margin: 0 -1.25rem 1rem; }
+  }
 </style>
 """
 
@@ -81,6 +168,7 @@ _PAGE_STYLE = """
 def _render_page(body: str) -> HTMLResponse:
     return HTMLResponse(
         f"<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
+        f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
         f"<title>MOEGI 承認UI</title>{_PAGE_STYLE}</head>"
         f"<body>{_g9_badge_html()}{body}</body></html>"
     )
@@ -119,16 +207,14 @@ def index() -> HTMLResponse:
     body = f"""
     <h1>MOEGI 承認UI</h1>
     <h2>新しい分析を実行</h2>
-    <p class="run-warning">⚠️ ローカルLLMで実行するため<strong>1〜4分程度かかります</strong>。
-    実行中はこのタブを閉じずにお待ちください（フリーズしたように見えますが処理中です）。</p>
-    <form method="post" action="/runs" onsubmit="
+    <p class="run-warning">⚠️ ローカルLLMで実行するため<strong>1〜4分程度</strong>かかります。実行中はタブを閉じずにお待ちください。</p>
+    <form class="run-form" method="post" action="/runs" onsubmit="
       this.querySelector('button').disabled = true;
-      this.querySelector('button').textContent = '実行中…（1〜4分。閉じずにお待ちください）';
+      this.querySelector('button').textContent = '実行中…（1〜4分）';
     ">
-      <label>対象条文（allowlistラベル）:
-        <select name="label">{label_options}</select>
-      </label>
-      <button type="submit">通達Diff→更新案パイプラインを実行</button>
+      <label for="label-select">対象条文</label>
+      <select id="label-select" name="label">{label_options}</select>
+      <button type="submit">パイプラインを実行</button>
     </form>
     <h2>過去の実行</h2>
     {run_list}
@@ -194,16 +280,16 @@ def _trace_html(row: dict) -> str:
         new_text = new_text.replace(escaped_quote, f"<mark>{escaped_quote}</mark>")
 
     if row["old_text"] is not None:
-        old_block = f"<div><strong>旧版（{html.escape(row['old_path'] or '')}）</strong><div class='trace-text'>{html.escape(row['old_text'])}</div></div>"
+        old_block = f"<div><span class='field-label'>旧版（{html.escape(row['old_path'] or '')}）</span><div class='trace-text'>{html.escape(row['old_text'])}</div></div>"
     else:
-        old_block = "<div><strong>旧版</strong><div class='trace-text'>（完全新設。旧版に対応条文なし）</div></div>"
+        old_block = "<div><span class='field-label'>旧版</span><div class='trace-text'>（完全新設。旧版に対応条文なし）</div></div>"
 
     return f"""
     <details>
       <summary>原文トレース（条文: {html.escape(row['new_path'])}）</summary>
       <div class="diff">
         {old_block}
-        <div><strong>新版（{html.escape(row['new_path'])}）</strong><div class="trace-text">{new_text}</div></div>
+        <div><span class="field-label">新版（{html.escape(row['new_path'])}）</span><div class="trace-text">{new_text}</div></div>
       </div>
     </details>
     """
@@ -218,13 +304,16 @@ def _proposal_html(row: dict) -> str:
 
     return f"""
     <div class="proposal" data-status="{html.escape(status)}">
-      <div class="meta">変更: {html.escape(row['change_label'])}（{html.escape(row['change_kind'])}） / 対象項目: {html.escape(item_label)}</div>
-      <p><span class="badge verdict-{html.escape(row['verdict'])}">{html.escape(row['verdict'])}</span>
-         信頼度 {row['confidence']:.2f} 　ステータス: <strong>{html.escape(status)}</strong></p>
-      <p>{html.escape(row['rationale'])}</p>
+      <div class="meta">変更 {html.escape(row['change_label'])}（{html.escape(row['change_kind'])}） ・ 対象項目 {html.escape(item_label)}</div>
+      <div class="chips">
+        <span class="chip">{html.escape(row['verdict'])}</span>
+        <span class="chip status-chip">{html.escape(status)}</span>
+        <span class="confidence">信頼度 {row['confidence']:.2f}</span>
+      </div>
+      <p class="rationale">{html.escape(row['rationale'])}</p>
       <div class="diff">
-        <div class="before">Before: {before}</div>
-        <div class="after">After: {after}</div>
+        <div class="before"><span class="field-label">Before</span>{before}</div>
+        <div class="after"><span class="field-label">After</span>{after}</div>
       </div>
       {_trace_html(row)}
       <div class="actions">
