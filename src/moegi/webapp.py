@@ -18,12 +18,13 @@ import json
 from pathlib import Path
 
 from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from moegi import ingest, llm, pipeline, store
+from moegi import fax, ingest, llm, nippou, pipeline, store
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _G9_LATEST_PATH = _REPO_ROOT / "config" / "g9_latest.json"
+_FAX_OUTPUT_DIR = _REPO_ROOT / "data" / "fax_previews"
 
 app = FastAPI(title="MOEGI 承認UI")
 
@@ -237,6 +238,8 @@ def index() -> HTMLResponse:
     </form>
     <h2>過去の実行</h2>
     {run_list}
+    <h2>日報エージェント</h2>
+    <p><a href="/nippou">日報の文字起こし→構造化を試す</a>（design.md §6.5・要配慮個人情報のためローカル固定）</p>
     """
     return _render_page(body)
 
@@ -359,9 +362,34 @@ def review_run(run_id: str) -> HTMLResponse:
     if not rows:
         return _render_page(f"<h1>run_id={html.escape(run_id)}</h1><p>更新案がありません。</p>")
 
+    approved_count = sum(1 for r in rows if r["status"] == "承認")
+    fax_section = f"""
+    <h2>配布（即時チャネル）</h2>
+    <p class="meta">承認済み {approved_count} 件を反映したFAX様式PDFのプレビューを生成します（design.md §5.3）。</p>
+    <form method="get" action="/runs/{html.escape(run_id)}/fax-preview">
+      <button type="submit">FAXプレビューPDFを生成</button>
+    </form>
+    """
+
     body = f"<h1>更新案の承認（run_id={html.escape(run_id)}）</h1>"
     body += "".join(_proposal_html(row) for row in rows)
+    body += fax_section
     return _render_page(body)
+
+
+@app.get("/runs/{run_id}/fax-preview")
+def fax_preview(run_id: str) -> FileResponse:
+    """design.md §5.3 即時チャネル。承認済み更新案からFAX様式PDFを生成し画面プレビューする。"""
+    conn = _db_conn()
+    try:
+        rows = store.list_proposals_for_review(conn, run_id)
+    finally:
+        conn.close()
+
+    approved = [r for r in rows if r["status"] == "承認"]
+    out_path = _FAX_OUTPUT_DIR / f"{run_id}.pdf"
+    fax.generate_fax_pdf("◯◯訪問看護ステーション", approved, out_path)
+    return FileResponse(out_path, media_type="application/pdf", filename=f"fax_preview_{run_id}.pdf")
 
 
 def _redirect_to_run(conn, proposal_row_id: int) -> RedirectResponse:
@@ -399,3 +427,68 @@ def edit_proposal(proposal_row_id: int, after: str = Form(...)) -> RedirectRespo
         return _redirect_to_run(conn, proposal_row_id)
     finally:
         conn.close()
+
+
+def _nippou_record_html(record: nippou.NippouRecord) -> str:
+    rows = "".join(
+        f"<tr><th>{html.escape(item.checklist_item_id)}</th>"
+        f"<td><span class='chip {'status-chip' if not item.filled else ''}'>"
+        f"{'記入済み' if item.filled else '未記入'}</span> {html.escape(item.value)}</td></tr>"
+        for item in record.items
+    )
+    evaluation_html = ""
+    if record.evaluation:
+        ev = record.evaluation
+        evaluation_html = f"""
+        <h3>評価（design.md §6.5・評価の記録）</h3>
+        <table>
+          <tr><th>看護目標（goal_ref）</th><td>{html.escape(ev.goal_ref or '（参照なし）')}</td></tr>
+          <tr><th>達成の程度（achievement）</th><td>{html.escape(ev.achievement)}</td></tr>
+          <tr><th>効果（effect）</th><td>{html.escape(ev.effect or '（記載なし）')}</td></tr>
+          <tr><th>ステータス</th><td><span class="chip status-chip">{'記入済み' if ev.filled else '未記入'}</span></td></tr>
+        </table>
+        """
+    return f"""
+    <h2>構造化結果（utterance_id={html.escape(record.utterance_id)}）</h2>
+    <table style="width:100%; border-collapse: collapse;">{rows}</table>
+    {evaluation_html}
+    """
+
+
+@app.get("/nippou", response_class=HTMLResponse)
+def nippou_form() -> HTMLResponse:
+    body = """
+    <h1>日報エージェント（design.md §6.5）</h1>
+    <p class="run-warning">⚠️ 要配慮個人情報を扱うため常にローカル（gemma4:26b）で処理します（ledger N-11）。
+    実運用ではGWSドキュメントの音声入力を主として想定していますが、ここでは発話テキストを
+    直接貼り付けて structure() を試せます（design.md §6.5 G7: テキスト入力でも同じ経路）。</p>
+    <form method="post" action="/nippou/structure">
+      <label for="utterance">発話内容（テキスト）</label><br>
+      <textarea id="utterance" name="utterance" rows="4" style="width:100%"
+        placeholder="訪問終了しました。血圧128の78、体温36.5度、脈拍70、呼吸数16でした。特記事項はありません。"></textarea>
+      <button type="submit">構造化する</button>
+    </form>
+    """
+    return _render_page(body)
+
+
+@app.post("/nippou/structure", response_class=HTMLResponse)
+def nippou_structure(utterance: str = Form(...)) -> HTMLResponse:
+    sitedoc = pipeline.load_sitedoc()
+    adapter = llm.LLMAdapter()
+    try:
+        agent = nippou.NippouAgent(adapter)
+        agent.set_checklist(sitedoc.items)
+        text = agent.transcribe(utterance)
+        record = agent.structure(text, utterance_id=store.new_run_id()[:8])
+    finally:
+        adapter.close()
+
+    body = f"""
+    <h1>日報エージェント（design.md §6.5）</h1>
+    <p><a href="/nippou">← もう一度試す</a></p>
+    <h2>発話内容</h2>
+    <p class="trace-text">{html.escape(text)}</p>
+    {_nippou_record_html(record)}
+    """
+    return _render_page(body)

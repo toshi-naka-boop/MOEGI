@@ -44,6 +44,11 @@ model = "tanuki"
 [draft]
 backend = "local"
 model = "tanuki"
+
+[nippou]
+backend = "local"
+model = "gemma4"
+reasoning_effort = "none"
 """
 
 
@@ -123,6 +128,22 @@ class LoadModelConfigTest(unittest.TestCase):
             cfg = load_model_config(path)  # 例外を上げないことそのものがテスト
             self.assertEqual(cfg["stages"]["matching"].backend, "orca")
             self.assertEqual(cfg["stages"]["draft"].backend, "orca")
+
+    def test_rejects_orca_backend_for_nippou(self):
+        # ledger N-11: nippou（日報エージェントのstructure()）は患者の実際の看護記録を
+        # 扱う唯一の工程なのでLOCAL_ONLY_STAGESに残る。
+        bad = VALID_CONFIG.replace('[nippou]\nbackend = "local"', '[nippou]\nbackend = "orca"')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_toml(Path(tmp), bad)
+            with self.assertRaises(llm.ConfigError):
+                load_model_config(path)
+
+    def test_reasoning_effort_is_loaded_from_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_toml(Path(tmp), VALID_CONFIG)
+            cfg = load_model_config(path)
+            self.assertEqual(cfg["stages"]["nippou"].reasoning_effort, "none")
+            self.assertIsNone(cfg["stages"]["matching"].reasoning_effort)
 
 
 class AdapterRoutingTest(unittest.TestCase):
@@ -289,6 +310,18 @@ class AdapterRoutingTest(unittest.TestCase):
         adapter, client = self._make_adapter(config_text=config)
         adapter.complete("draft", "prompt", {"max_tokens": 50})
         self.assertEqual(client.post_bodies[-1]["max_tokens"], 50)
+
+    def test_reasoning_effort_is_applied_to_local_call(self):
+        # opus批評C-11・ledger N-11: nippouはreasoning_effort="none"が設定に無いと
+        # gemma4:26b等のreasoningモデルで出力が空になる不具合があった。
+        adapter, client = self._make_adapter()
+        adapter.complete("nippou", "prompt")
+        self.assertEqual(client.post_bodies[-1]["reasoning_effort"], "none")
+
+    def test_reasoning_effort_absent_when_not_configured(self):
+        adapter, client = self._make_adapter()
+        adapter.complete("draft", "prompt")
+        self.assertNotIn("reasoning_effort", client.post_bodies[-1])
 
 
 if __name__ == "__main__":

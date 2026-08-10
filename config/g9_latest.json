@@ -1,9 +1,9 @@
 {
-  "mode": "single-local",
-  "recall": 0.333,
-  "false_positive_rate": 0.143,
-  "measured_at": "2026-08-10",
+  "mode": "single-cloud",
+  "recall": 0.833,
+  "false_positive_rate": 0.357,
+  "measured_at": "2026-08-11",
   "goldset": "config/goldset.toml",
-  "stale": true,
-  "note": "ledger N-10適用後の実測。ただしN-11（2026-08-11）で③-b突合のクラウド既定化により、この数値が測定した構成（dev_local_only=true・全工程ローカル）はもう既定ではない。新既定（③-bクラウド・claude-sonnet-5）でのG9再測定はD5の課題（design.md §10）。stale=trueの間、承認UIはこの数値を「現在の既定の実測値」として提示しない"
+  "stale": false,
+  "note": "N-11（③-b突合・④更新案生成をclaude-sonnet-5/haiku-4.5のクラウド既定に変更）後の実測。単発モード（既定）で再現率0.0%→50.0%→83.3%と大幅改善（旧local-Tanuki比）。一方で誤検出率は26.2%→35.7%に上昇（N-8・過剰検出は引き続き未解決）。一括モードは再現率100%だが判定不能が6件中4件と多く実用的でない（design.md §6.3参照）"
 }

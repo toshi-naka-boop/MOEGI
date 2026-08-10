@@ -43,15 +43,15 @@ from typing import Any
 
 import httpx
 
-STAGES = ("diff", "requirement", "matching", "draft")
+STAGES = ("diff", "requirement", "matching", "draft", "nippou")
 
 # design.md §6.1 第一原則（v13・ledger N-11）: ローカル固定が必要なのは要配慮個人情報
 # （患者の医療・看護情報）を扱う工程だけ。SiteDoc/ChecklistItemは項目ラベルのテンプレート
 # 定義であり患者データを含まないため、matching/draftは他のクラウド工程と同じ扱いにする
 # （v12までは事業所文書の有無だけでこの2工程を強制ローカルにしていたが、その制約は廃止）。
-# 現状LOCAL_ONLY_STAGESは空集合。将来、日報エージェント（transcribe/structure）を
-# このアダプタ経由にする場合は、そちらを追加する（常に要配慮個人情報を扱うため）。
-LOCAL_ONLY_STAGES: frozenset[str] = frozenset()
+# nippou（日報エージェントのstructure()）は患者の実際の看護記録を扱う唯一の工程なので
+# LOCAL_ONLY_STAGESに残す（design.md §6.5・nippou.py）。
+LOCAL_ONLY_STAGES: frozenset[str] = frozenset({"nippou"})
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = _REPO_ROOT / "config" / "models.toml"
@@ -98,6 +98,9 @@ class StageConfig:
     price_jpy_per_1k_out: float = 0.0
     max_output_tokens: int | None = None  # design.md §6.6: 工程ごとの出力トークン上限
     local_timeout_seconds: float | None = None
+    reasoning_effort: str | None = None  # opus批評C-11・ledger N-11: gemma4:26b等の
+    # reasoningモデルは、これを付けないと出力がreasoningトークンに全消費されcontentが
+    # 空になる（実測: max_tokens=900で21秒・本文0字 → "none"指定で10秒・正しいJSON）。
 
 
 def load_model_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
@@ -132,6 +135,7 @@ def load_model_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
                 if raw.get("local_timeout_seconds") is not None
                 else None
             ),
+            reasoning_effort=raw.get("reasoning_effort"),
         )
         if stage in LOCAL_ONLY_STAGES and cfg.backend != "local":
             raise ConfigError(
@@ -243,6 +247,8 @@ class LLMAdapter:
             opts = {**opts, "max_tokens": stage_cfg.max_output_tokens}
         if stage_cfg.local_timeout_seconds is not None and "local_timeout" not in opts:
             opts = {**opts, "local_timeout": stage_cfg.local_timeout_seconds}
+        if stage_cfg.reasoning_effort is not None and "reasoning_effort" not in opts:
+            opts = {**opts, "reasoning_effort": stage_cfg.reasoning_effort}
 
         # 第一原則: LOCAL_ONLY_STAGES所属、またはdev_local_only中、または設定自体がlocalなら常にローカル。
         # ここでは「設定を信用せず毎回判定する」ことが重要（第一原則を実装で守るため）。
@@ -373,6 +379,10 @@ class LLMAdapter:
         }
         if "max_tokens" in opts:
             body["max_tokens"] = opts["max_tokens"]
+        if "reasoning_effort" in opts:
+            # opus批評C-11・ledger N-11: reasoningモデル（gemma4:26b等）は、これが無いと
+            # 出力トークン予算がreasoningに全消費されcontentが空になる（実測確認済み）。
+            body["reasoning_effort"] = opts["reasoning_effort"]
 
         local_timeout = opts.get("local_timeout", LOCAL_CALL_TIMEOUT_SECONDS)
         start = time.monotonic()
