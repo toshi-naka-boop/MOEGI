@@ -284,6 +284,84 @@ def _format_segments_block(segments: list[_Segment]) -> str:
     return "\n".join(f"{s.id}: {s.text.strip()}" for s in segments)
 
 
+def _format_other_items_block(items: list[ChecklistItem], exclude_label: str) -> str:
+    """design.md §6.7(a)・ledger N-8: 単発モードの突合が兄弟項目を見えるようにする。"""
+    others = [i.label for i in items if i.label != exclude_label]
+    return "、".join(others) if others else "（他に項目なし）"
+
+
+def _format_precedents_block(precedents: list[dict]) -> str:
+    """design.md §6.7(b)・ledger N-8: 過去の人間の判断を弱い参考情報として注入する。
+
+    批評（codex round-4 #3）を受け、proposals.statusを「判定の正誤」と断定しない文言にする
+    （却下は文面への不満の可能性もあるため）。
+    """
+    if not precedents:
+        return ""
+    lines = []
+    for p in precedents:
+        if p["status"] == "却下":
+            note = "この項目への更新案は過去に却下されている（理由は文面上不明）"
+        else:
+            note = "この項目が要更新と判定され、その判定は受け入れられている"
+        lines.append(f"- {note}（対象の変更: {p['change_summary']}）")
+    return (
+        "\n【この項目に関する過去の人間の判断（参考情報。今回の判定を上書きする根拠にはしないこと）】\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
+_ORCHESTRATE_PROMPT = """あなたは訪問看護事業所のチェックリスト担当者です。
+以下は、1つの通達変更について、チェックリストの複数項目を独立に判定した結果です。
+同じ通達内容を根拠に複数の項目が「要更新」と判定されている場合、実際にはそのうち
+一部だけが本当に固有の文言変更を必要としていて、残りは既に他の項目でカバーされている
+（重複している）可能性があります。
+
+【現場への要求事項】
+{requirement_text}
+
+【独立判定で「要更新」となった項目】
+{candidates_block}
+
+【指示】
+各項目について、本当に固有の文言変更が必要かを再検討してください。複数の項目が
+同じ内容を重複して主張している場合は、その中で最も直接的に対応する項目だけを残し、
+他は重複として除外してください。**判断に迷う場合は残してください**（見逃しの方が
+重複より問題が大きいため、除外は確信があるときだけ行うこと）。
+
+【出力形式】
+次のJSONオブジェクトのみを出力すること。前置き・説明文・コードブロック記号は付けないこと。
+keepには、実際に要更新のまま残すべき項目番号を文字列の配列で入れること（例: ["1", "3"]）。
+
+出力例:
+{{"keep": ["1", "3"], "rationale": "判断理由をここに"}}
+"""
+
+
+def _orchestrate_duplicate_candidates(
+    candidates: list["Impact"], requirement_text: str, adapter: LLMAdapter
+) -> list["Impact"]:
+    """design.md §6.7(a)追記・ledger N-8（実験実装）。「要更新」候補が複数出た場合、
+    1回のLLM呼び出しで横断的に見比べさせ、重複していそうな候補を除外する。
+
+    呼び出し失敗・形式不正・timeoutの場合は元の候補をそのまま返す（完走優先・§6.6）。
+    """
+    candidates_block = "\n".join(
+        f"{i}. 項目「{c.sitedoc_item_id}」: {c.rationale}" for i, c in enumerate(candidates, start=1)
+    )
+    prompt = _ORCHESTRATE_PROMPT.format(requirement_text=requirement_text, candidates_block=candidates_block)
+    result = adapter.complete("matching", prompt)
+    if result.get("timeout"):
+        return candidates
+    entry = _extract_json_object(result["text"])
+    if not entry or not isinstance(entry.get("keep"), list):
+        return candidates
+    keep_indices = {str(k) for k in entry["keep"]}
+    kept = [c for i, c in enumerate(candidates, start=1) if str(i) in keep_indices]
+    return kept if kept else candidates  # 空になった場合は誤除外を疑い元のまま残す
+
+
 _MATCH_ITEM_PROMPT = """あなたは訪問看護事業所のチェックリスト担当者です。
 以下の「現場への要求事項」と、文ごとに区切った「通達原文」をもとに、事業所チェックリストの1項目
 「{item_label}」が、この要求事項によって「要更新」か「影響なし」かを判定してください。
@@ -297,6 +375,12 @@ _MATCH_ITEM_PROMPT = """あなたは訪問看護事業所のチェックリス�
 【判定対象のチェックリスト項目】
 {item_label}
 
+【チェックリストの他の項目（参考情報。これらは判定対象ではない）】
+{other_items_block}
+判定対象の項目（{item_label}）に、この要求事項に対応する固有の文言変更が本当に必要かを
+判断すること。他の項目がこの要求事項をカバーするからといって、機械的に「影響なし」に
+倒す必要はない——同じ通達内容が複数の項目にそれぞれ実質的な変更を要求することもある。
+{precedents_block}
 【出力形式】
 次のJSONオブジェクトのみを出力すること。前置き・説明文・コードブロック記号は付けないこと。
 verdictの値は "要更新" か "影響なし" のどちらか一方をそのまま使うこと（他の文字列を使わない・両方書かない）。
@@ -538,8 +622,14 @@ def match_requirements(
     *,
     run_id: str,
     store_conn=None,
+    orchestrate: bool = False,
 ) -> list[Impact]:
-    """③-b 突合（design.md §6.1）。事業所文書が入るためローカル固定。
+    """③-b 突合（design.md §6.1）。v13以降backend既定はクラウド（N-11。事業所文書は
+    項目ラベルのみで要配慮個人情報を含まないため）。stage名はllm.pyへそのまま渡す。
+
+    orchestrate=True（実験実装・ledger N-8 2026-08-12深夜）: 1つの要求事項について
+    「要更新」の候補が複数出た場合、それらを1回のLLM呼び出しで横断的に見比べさせ、
+    重複を裁定する。design.md §6.7(a)の「プロンプトに兄弟項目名を書く」方式と比較検証中。
 
     要件 × 既存チェックリスト項目それぞれを1呼び出しで判定する。既存項目のどれも
     「要更新」にならなかった場合のみ、新規項目の要否を追加で1回問う。
@@ -548,6 +638,10 @@ def match_requirements(
     LLMが返した evidence_segment_id が実在する文を指していない場合は根拠不成立とみなし、
     そのImpactを作らない（ledger N-10。引用文字列自体はコード側の文分割から取るため
     「引用が途中で崩れる」という失敗モードは起こらない）。
+
+    design.md §6.7(a)(b)・ledger N-8（2026-08-12深夜）: 単発モードでは項目ごとに独立して
+    判定するため、他項目の存在が見えず重複した「要更新」判定が起きやすい。プロンプトに
+    兄弟項目のラベルと、store_connが渡されていれば過去の人間の判断（弱い参考情報）を注入する。
     """
     impacts: list[Impact] = []
     existing_labels = "、".join(item.label for item in sitedoc.items)
@@ -555,14 +649,20 @@ def match_requirements(
     for req in requirements:
         change = changes_by_id[req.change_id]
         segments = _segment_notice_text(change.new_section.text)
-        matched_existing = False
+        candidates: list[Impact] = []  # この要求事項について「要更新」になった項目（orchestrate用）
 
         for item in sitedoc.items:
+            precedents_block = ""
+            if store_conn is not None:
+                precedents = store.list_reviewed_precedents_for_item(store_conn, item.label)
+                precedents_block = _format_precedents_block(precedents)
             prompt = _MATCH_ITEM_PROMPT.format(
                 item_label=item.label,
                 requirement_text=req.text,
                 path=change.new_section.path,
                 segments_block=_format_segments_block(segments),
+                other_items_block=_format_other_items_block(sitedoc.items, item.label),
+                precedents_block=precedents_block,
             )
             result = adapter.complete("matching", prompt)
             if store_conn is not None:
@@ -585,8 +685,7 @@ def match_requirements(
             if evidence is None:
                 continue  # 実在しない文IDはevidence不成立→提案を作らない
 
-            matched_existing = True
-            impacts.append(
+            candidates.append(
                 Impact(
                     id=f"impact-{change.id}-{item.label}",
                     change_id=change.id,
@@ -597,6 +696,14 @@ def match_requirements(
                     evidence=evidence,
                 )
             )
+
+        if orchestrate and len(candidates) >= 2:
+            # design.md §6.7(a)追記・ledger N-8: 独立判定だけでは重複を消し切れないため、
+            # 「要更新」候補が複数出た場合のみ、それらを横断的に見比べて裁定する（実験実装）。
+            candidates = _orchestrate_duplicate_candidates(candidates, req.text, adapter)
+
+        impacts.extend(candidates)
+        matched_existing = bool(candidates)
 
         # ledger N-7: 完全新設の条文は、既存項目が要更新になっていても新規項目を必ず問う。
         is_new_provision = change.kind == "追加"
@@ -940,6 +1047,7 @@ def run(
     store_conn=None,
     labels: set[str] | None = None,
     batch: bool | None = None,
+    orchestrate: bool = False,
 ) -> dict[str, list]:
     """②差分抽出→③-a要件抽出→③-b突合→④更新案生成を順に実行する。
 
@@ -949,6 +1057,8 @@ def run(
     batch: design.md §7「投入単位と突合のバッチ化」（v11）。突合・更新案生成を
         1呼び出しにまとめるか。None なら models.toml の batch_matching に従う。
         False は単発モード（デバッグ用・承認条件3）。
+    orchestrate: design.md §6.7(a)追記・ledger N-8（実験実装）。単発モード限定。
+        Trueの場合、match_requirements()のorchestrate引数へそのまま渡す。
     """
     if batch is None:
         batch = getattr(adapter, "batch_matching", True)
@@ -959,11 +1069,21 @@ def run(
     extract_change_summaries(changes, adapter, run_id=run_id, store_conn=store_conn)
     requirements = extract_requirements(changes, adapter, run_id=run_id, store_conn=store_conn)
     changes_by_id = {c.id: c for c in changes}
-    match_fn = _match_requirements_batched if batch else match_requirements
     draft_fn = _draft_proposals_batched if batch else draft_proposals
-    impacts = match_fn(
-        requirements, changes_by_id, sitedoc, adapter, run_id=run_id, store_conn=store_conn
-    )
+    if batch:
+        impacts = _match_requirements_batched(
+            requirements, changes_by_id, sitedoc, adapter, run_id=run_id, store_conn=store_conn
+        )
+    else:
+        impacts = match_requirements(
+            requirements,
+            changes_by_id,
+            sitedoc,
+            adapter,
+            run_id=run_id,
+            store_conn=store_conn,
+            orchestrate=orchestrate,
+        )
     proposals = draft_fn(impacts, sitedoc, adapter, run_id=run_id, store_conn=store_conn)
     return {
         "changes": changes,

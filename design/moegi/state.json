@@ -4,7 +4,7 @@
   "designVersion": "v13",
   "criticRound": 3,
   "approvedAt": "2026-08-08",
-  "openIssueIds": ["N-8", "N-4", "R-56", "script-rework"],
+  "openIssueIds": ["N-4", "R-56", "script-rework", "checklist-item-identity"],
   "requiredReads": ["design.md", "ledger.md"],
   "quickOverview": "overview.md（design.mdを可視化した要約。全体像・詰まり所を先に把握したい時に読む）",
   "progress": {
@@ -17,19 +17,25 @@
     "N-11": "完了（2026-08-11）。プライバシー境界を「事業所文書」→「要配慮個人情報」に訂正。③-b突合・④更新案生成をクラウド既定に変更（claude-sonnet-5/haiku-4.5）。批評2巡（opus design-critic + sonnetクロス、codexトークン上限のため代替）でHigh10件検出、ユーザーが実ワークフロー（GWS音声入力主・日報はバッチ処理・Tanukiフォールバック維持）を明確にして主要懸念を解消。実機確認済み（--label c、47.5秒、backend=orca全工程、過剰検出6→1項目に改善）。goal_ref非流出の回帰テスト追加。dev_local_only既定をfalseに変更",
     "D5": "✅完了（2026-08-11・ユーザー『全て承認するので動く形まで一気に進めて』により無停止で実施）。①G9-b再測定: 再現率0.0%→83.3%（誤検出率も26.2%→35.7%に上昇=N-8継続課題）。②reasoning_effort実装・opus批評C-11を実機で決着（gemma4:26b structure()がコールド17.8秒/ウォーム3.4秒、旧Tanuki同等）。③日報エージェント実装（nippou.py、テスト16件、承認UI統合）。④D1相当ゲート実測（スワップ+6.1GB、24GBに余裕なしだが動作）。⑤FAX様式PDF生成（fax.py・WeasyPrint、Homebrewでpango等を新規インストール、承認UI統合）。⑥オフライン薄通し確認（全工程ローカルフォールバックで完走）。全て実機・ブラウザで動作確認済み",
     "D5-followup": "✅完了（2026-08-11・ユーザーレビューを受けた2件の追加対応）。①G9-b常時バッジを承認UIから削除（R-75・デモの邪魔という指摘）。開示先はピッチ・審査対話に変更。②FAX配信履歴（監査ログ）を`fax_deliveries`テーブルで永続化（R-76）——run_id・proposal_row_ids・生成時刻を記録し、run閲覧ページに一覧表示。テスト3件追加・実機確認済み。副産物: pytestが`.venv`から消えていたため再インストールしpyproject.tomlのdev依存に記録",
-    "D5-followup2": "✅完了（2026-08-11〜12・ユーザーレビューを受けた4件の追加対応）。①承認UIのUX修正2件（ホームリンク・過去実行の表示、R-78）。②ORCA3段フォールバック実装——ORCAが実はAnthropic/Gemini/Qwen等のマルチプロバイダルーターだと実測で判明（R-64解消）。「主モデル→orcarouter/auto→ローカル」に拡張し、②③-a③-b④のローカル最終フォールバックもTanuki 7B→gemma4:26bに切替（R-79）。実機で3段フォールバックの実動作を確認済み。③モバイル音声入力UI＋処置ボタンをMOEGI本体（/nippou）に実装（R-80）——MediaRecorder APIでの録音→.webmアップロード→faster-whisper文字起こし、処置内容はCSS `:has()`のピルボタンで多重選択しLLMを経由せず格納。実音声ファイルでのアップロード完走を確認済み（マイク録音自体は実機スマホでの確認が別途必要）"
+    "D5-followup2": "✅完了（2026-08-11〜12・ユーザーレビューを受けた4件の追加対応）。①承認UIのUX修正2件（ホームリンク・過去実行の表示、R-78）。②ORCA3段フォールバック実装——ORCAが実はAnthropic/Gemini/Qwen等のマルチプロバイダルーターだと実測で判明（R-64解消）。「主モデル→orcarouter/auto→ローカル」に拡張し、②③-a③-b④のローカル最終フォールバックもTanuki 7B→gemma4:26bに切替（R-79）。実機で3段フォールバックの実動作を確認済み。③モバイル音声入力UI＋処置ボタンをMOEGI本体（/nippou）に実装（R-80）——MediaRecorder APIでの録音→.webmアップロード→faster-whisper文字起こし、処置内容はCSS `:has()`のピルボタンで多重選択しLLMを経由せず格納。実音声ファイルでのアップロード完走を確認済み（マイク録音自体は実機スマホでの確認が別途必要）",
+    "N-8-partial": "✅(a)(b)実装完了・採用（2026-08-12深夜・/design-loop・design-critic opus + codex批評round-4を経て）。単発モードの突合プロンプトに兄弟項目ラベル＋過去承認履歴（弱い参考情報）を追加。実測: 誤検出率40.5%→9.5%に改善、再現率83.3%を維持（初回の強い指示文言では再現率66.7%→33.3%に悪化する副作用が出たため文言を弱めて再測定・採用）。ユーザー提案のオーケストレーションLLM（`orchestrate`フラグ）も同夜実装・実測（誤検出率9.5%→7.1%とさらに改善したが48セル中1件差でノイズと未区別のため実験フラグのまま・本番非採用）。当初案にあった(c)チェックリスト接続点は批評で重大な設計欠陥（`sitedoc_item_id`が可変な自然キーであることに起因）が判明し実装せず、朝の判断タスクへ差し戻し。テスト11件追加・全125件green"
   },
-  "nextAction": "ユーザーが実機のスマホ・タブレットで /nippou の録音UIを確認。確認後、D6（LINEキュー型チャネル・G6接続点・§7台本#6の作り直し）へ",
+  "nextAction": "ユーザーが起床後、朝の判断タスク（下記carryOverToD6・checklist-item-identity）を確認。実機のスマホ・タブレットで /nippou の録音UIも確認。確認後、D6（LINEキュー型チャネル・G6接続点・§7台本#6の作り直し）へ",
   "commitPolicy": "D区切りごとにコミットする（feat: D1 / feat: D2 ...）。バグ修正はfix:で分離。ユーザー決定 2026-08-09",
   "carryOverToD6": {
-    "script-rework": "§7台本#6を実ワークフロー（現場録音→事務所バッチ処理）に合わせて作り直す",
-    "n8-overdetection": "誤検出率35.7%（G9-b再測定で悪化が数値化）。D6〜D7で対処を検討",
-    "line-queue": "LINEキュー型チャネル（store-and-forward・送信待ちバッジ・復帰時自動フラッシュ）は未実装",
-    "checklist-nippou-connection": "承認済みチェックリスト→日報エージェントの接続点1箇所（setChecklist呼び出し）はまだ配線されていない",
-    "mobile-nippou-real-device-check": "R-80の録音UIは実機スマホ・タブレットのマイク許可フロー・タッチ操作で未確認（ヘッドレスブラウザでは検証不可）"
+    "script-rework": "§7台本#6を実ワークフロー（現場録音→事務所バッチ処理）に合わせて作り直す。design.md §7に2026-08-12深夜のドラフト案あり（要レビュー・🔧マーク）",
+    "line-queue": "LINEキュー型チャネル（store-and-forward・送信待ちバッジ・復帰時自動フラッシュ）は未実装。外部サービス連携のため実装前にユーザー承認が必要",
+    "g6-ui": "Before/After比較画面・発話カードのUI（design.md D6行）は未実装",
+    "mobile-nippou-real-device-check": "R-80の録音UIは実機スマホ・タブレットのマイク許可フロー・タッチ操作で未確認（ヘッドレスブラウザでは検証不可）",
+    "orchestrate-adoption": "N-8対策のオーケストレーションLLM（orchestrate=True）を本番既定にするか。誤検出率7.1%への追加改善が実測ノイズか実効果か、複数回の実測で確認してから判断"
+  },
+  "blockedOn": {
+    "N-4": "厚労省「説明資料」PDFがリポジトリに存在しないため原文確認が今夜は不可能だった。ユーザーが原本を持っているか確認が必要",
+    "checklist-item-identity": "2026-08-12深夜の批評round-4で判明: ChecklistItemの識別子は項目ラベル文字列そのもの（可変な自然キー）。『承認済みチェックリストを日報エージェントへ反映する』(c)機能を作るには、項目に不変IDを持たせる設計変更が必要（sitedoc_sample.toml・goldset.toml・store.pyのimpacts.sitedoc_item_idを含む複数ファイルに波及）。実装するかどうか・するとしたらどの範囲まで変更を許容するかはユーザー判断が必要（詳細: reviews/round-4-opus.md, ledger N-8「2026-08-12深夜」の項）"
   },
   "futureNippouAppNotes": {
     "procedures-button-ui": "R-77（2026-08-11）→R-80（2026-08-11〜12）で実装済み: 処置内容はLLM自由記述に任せず、ボタン選択式（複数選択可）の固定語彙UIにした（LLMの表記揺れ・誤認識リスクを避けるため）。当初は別途つくる予定の日報録音アプリ向けの設計メモだったが、ユーザー希望でMOEGI本体（/nippou）にプロトタイプとして実装。独立した本格的なモバイルアプリを別途作るかどうかは未定"
   },
+  "delegation": { "批評round-4": "design-critic opus + codex/gpt-5.6-sol xhigh" },
   "lastUpdated": "2026-08-12"
 }

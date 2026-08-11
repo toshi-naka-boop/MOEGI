@@ -83,7 +83,9 @@ def _predicted_verdict(impacts: list[pipeline.Impact], item_label: str) -> str:
     return "影響なし"
 
 
-def run_mode(mode: str, goldset: dict[str, dict], db_path: str | None = None) -> dict:
+def run_mode(
+    mode: str, goldset: dict[str, dict], db_path: str | None = None, orchestrate: bool = False
+) -> dict:
     batch = mode.startswith("batch")
     dev_local_only = mode.endswith("local")
 
@@ -118,6 +120,7 @@ def run_mode(mode: str, goldset: dict[str, dict], db_path: str | None = None) ->
                     labels={label},
                     batch=batch,
                     store_conn=store_conn,
+                    orchestrate=orchestrate,
                 )
                 for item_label, gold_verdict in gold["items"].items():
                     predicted = _predicted_verdict(result["impacts"], item_label)
@@ -191,6 +194,12 @@ def main() -> None:
     )
     parser.add_argument("--out", default=None, help="生の判定結果セルをJSONで書き出す先")
     parser.add_argument("--db", default=None, help="LLM生応答をCostRecordとして残すsqliteパス（監査用）")
+    parser.add_argument(
+        "--orchestrate",
+        action="store_true",
+        help="design.md §6.7(a)追記・ledger N-8（実験実装）。単発モードで「要更新」候補が"
+        "複数出た場合、重複裁定のLLM呼び出しを追加する",
+    )
     args = parser.parse_args()
 
     modes = list(MODES) if args.mode == "all" else args.mode.split(",")
@@ -202,7 +211,7 @@ def main() -> None:
     summaries = []
     for mode in modes:
         print(f"--- {mode} 実行中 ---", flush=True)
-        summary = run_mode(mode, goldset, db_path=args.db)
+        summary = run_mode(mode, goldset, db_path=args.db, orchestrate=args.orchestrate)
         _print_summary(summary)
         summaries.append(summary)
 

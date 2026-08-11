@@ -8,9 +8,11 @@ design.md §6.4「Impact.evidenceは必須。空なら提案を作らない」�
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from moegi import pipeline
+from moegi import pipeline, store
 from moegi.ingest import Section
 
 
@@ -202,6 +204,247 @@ class MatchRequirementsTest(unittest.TestCase):
             ]
         )
         self.assertEqual([i.sitedoc_item_id for i in impacts], ["バイタルサインの記録", None])
+
+
+class MatchRequirementsSiblingVisibilityTest(unittest.TestCase):
+    """design.md §6.7(a)・ledger N-8（2026-08-12深夜）: 単発モードの突合プロンプトに
+    兄弟項目のラベルを見せ、重複した「要更新」判定を防ぐ対策の検証。"""
+
+    def setUp(self):
+        self.sitedoc = pipeline.SiteDoc(
+            id="s",
+            kind="チェックリスト",
+            title="t",
+            items=[
+                pipeline.ChecklistItem(sitedoc_id="s", label="訪問開始・終了時刻の記録", kind="自由記述"),
+                pipeline.ChecklistItem(sitedoc_id="s", label="訪問日数・訪問頻度の記録", kind="自由記述"),
+                pipeline.ChecklistItem(sitedoc_id="s", label="特記事項", kind="自由記述"),
+            ],
+        )
+        self.change = pipeline.Change(
+            id="d",
+            old_section=None,
+            new_section=_section("第4の2", "標準時間を下回る訪問が頻繁な場合は実施と認められない。"),
+            kind="改正",
+            summary="標準時間を下回る訪問の厳格化",
+        )
+        self.requirement = pipeline.Requirement(change_id="d", text="頻回の短時間訪問を確認すること")
+
+    def test_prompt_includes_sibling_item_labels_not_the_target_item(self):
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                ]
+            }
+        )
+        pipeline.match_requirements(
+            [self.requirement], {"d": self.change}, self.sitedoc, adapter, run_id="r"
+        )
+        first_prompt = adapter.calls[0][1]
+        # 1件目（訪問開始・終了時刻の記録）の判定プロンプトには、他の2項目のラベルが入り、
+        # 自分自身のラベルは「他の項目」ブロックには重複して出ない設計であること。
+        self.assertIn("訪問日数・訪問頻度の記録", first_prompt)
+        self.assertIn("特記事項", first_prompt)
+
+    def test_prompt_does_not_force_deferring_to_other_items(self):
+        # R-79深夜の実測（G9-b before/after）: 「機械的に影響なしに倒せ」という強い指示は
+        # 誤検出率を大幅改善する一方で再現率も66.7%→33.3%まで悪化させた。指示を弱め、
+        # 「他の項目がカバーしていても機械的に影響なしにする必要はない」という文言に修正した。
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                ]
+            }
+        )
+        pipeline.match_requirements(
+            [self.requirement], {"d": self.change}, self.sitedoc, adapter, run_id="r"
+        )
+        self.assertIn("機械的に「影響なし」に", adapter.calls[0][1])
+
+
+class MatchRequirementsOrchestrateTest(unittest.TestCase):
+    """design.md §6.7(a)追記・ledger N-8（実験実装）: orchestrate=Trueの検証。
+
+    2項目以上が「要更新」になった場合のみ、追加のLLM呼び出し（重複裁定）が入ること、
+    その結果でkeepに残らなかった候補が除かれること、失敗時は元のまま残ることを確認する。
+    """
+
+    def setUp(self):
+        self.sitedoc = pipeline.SiteDoc(
+            id="s",
+            kind="チェックリスト",
+            title="t",
+            items=[
+                pipeline.ChecklistItem(sitedoc_id="s", label="項目A", kind="自由記述"),
+                pipeline.ChecklistItem(sitedoc_id="s", label="項目B", kind="自由記述"),
+            ],
+        )
+        self.change = pipeline.Change(
+            id="x",
+            old_section=None,
+            new_section=_section("第1", "文S1。"),
+            kind="改正",
+            summary="テスト用の変更",
+        )
+        self.requirement = pipeline.Requirement(change_id="x", text="要求事項")
+
+    def _both_updated_responses(self):
+        return [
+            json.dumps({"verdict": "要更新", "rationale": "A理由", "confidence": 0.7, "evidence_segment_id": "S1"}),
+            json.dumps({"verdict": "要更新", "rationale": "B理由", "confidence": 0.7, "evidence_segment_id": "S1"}),
+        ]
+
+    def test_does_not_call_orchestrator_when_single_candidate(self):
+        # 候補が1件のみなら重複裁定は不要（追加呼び出しをしない）。
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps({"verdict": "要更新", "rationale": "A理由", "confidence": 0.7, "evidence_segment_id": "S1"}),
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                ]
+            }
+        )
+        impacts = pipeline.match_requirements(
+            [self.requirement], {"x": self.change}, self.sitedoc, adapter, run_id="r", orchestrate=True
+        )
+        self.assertEqual(len(adapter.calls), 2)  # 項目A・項目Bの判定のみ（裁定呼び出しなし）
+        self.assertEqual([i.sitedoc_item_id for i in impacts], ["項目A"])
+
+    def test_orchestrator_filters_out_duplicate_candidate(self):
+        responses = self._both_updated_responses()
+        responses.append(json.dumps({"keep": ["1"], "rationale": "Aのみ固有の変更が必要"}))
+        adapter = _FakeAdapter({"matching": responses})
+        impacts = pipeline.match_requirements(
+            [self.requirement], {"x": self.change}, self.sitedoc, adapter, run_id="r", orchestrate=True
+        )
+        self.assertEqual(len(adapter.calls), 3)  # 項目A・項目B・裁定
+        self.assertEqual([i.sitedoc_item_id for i in impacts], ["項目A"])
+
+    def test_orchestrator_keeps_both_when_both_are_genuinely_needed(self):
+        responses = self._both_updated_responses()
+        responses.append(json.dumps({"keep": ["1", "2"], "rationale": "両方とも固有の変更が必要"}))
+        adapter = _FakeAdapter({"matching": responses})
+        impacts = pipeline.match_requirements(
+            [self.requirement], {"x": self.change}, self.sitedoc, adapter, run_id="r", orchestrate=True
+        )
+        self.assertEqual({i.sitedoc_item_id for i in impacts}, {"項目A", "項目B"})
+
+    def test_orchestrator_failure_keeps_original_candidates(self):
+        responses = self._both_updated_responses()
+        responses.append("これはJSONではない出力です")
+        adapter = _FakeAdapter({"matching": responses})
+        impacts = pipeline.match_requirements(
+            [self.requirement], {"x": self.change}, self.sitedoc, adapter, run_id="r", orchestrate=True
+        )
+        self.assertEqual({i.sitedoc_item_id for i in impacts}, {"項目A", "項目B"})
+
+    def test_orchestrate_false_never_calls_orchestrator(self):
+        # 既定値（False）は既存の挙動のまま——追加呼び出しをしない。
+        responses = self._both_updated_responses()
+        adapter = _FakeAdapter({"matching": responses})
+        impacts = pipeline.match_requirements(
+            [self.requirement], {"x": self.change}, self.sitedoc, adapter, run_id="r"
+        )
+        self.assertEqual(len(adapter.calls), 2)
+        self.assertEqual({i.sitedoc_item_id for i in impacts}, {"項目A", "項目B"})
+
+
+class MatchRequirementsPrecedentsTest(unittest.TestCase):
+    """design.md §6.7(b)・ledger N-8（2026-08-12深夜）: 過去の人間の判断を弱い参考情報として
+    突合プロンプトへ注入する対策の検証。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.conn = store.connect(Path(self.tmpdir.name) / "test.db")
+        self.addCleanup(self.conn.close)
+
+        self.sitedoc = pipeline.SiteDoc(
+            id="s",
+            kind="チェックリスト",
+            title="t",
+            items=[pipeline.ChecklistItem(sitedoc_id="s", label="特記事項", kind="自由記述")],
+        )
+        self.change = pipeline.Change(
+            id="e",
+            old_section=None,
+            new_section=_section("第4の3", "新しい要件文。"),
+            kind="改正",
+            summary="別の通達変更",
+        )
+        self.requirement = pipeline.Requirement(change_id="e", text="新しい要求事項")
+
+    def _seed_precedent(self, status: str) -> None:
+        past_change = pipeline.Change(
+            id="d",
+            old_section=None,
+            new_section=_section("第4の2", "過去の条文。"),
+            kind="改正",
+            summary="標準時間を下回る訪問の厳格化",
+        )
+        past_impact = pipeline.Impact(
+            id="impact-d-特記事項",
+            change_id="d",
+            sitedoc_item_id="特記事項",
+            verdict="要更新",
+            rationale="過去の判定理由",
+            confidence=0.7,
+            evidence=[pipeline.Evidence(notice_section_path="第4の2", quote="過去の条文。", offset=0)],
+        )
+        past_proposal = pipeline.Proposal(
+            id="proposal-impact-d-特記事項", impact_id="impact-d-特記事項", before="特記事項", after="更新後の文言"
+        )
+        store.save_pipeline_result(
+            self.conn,
+            "past-run",
+            {"changes": [past_change], "requirements": [], "impacts": [past_impact], "proposals": [past_proposal]},
+        )
+        row_id = store.list_proposals_for_review(self.conn, "past-run")[0]["row_id"]
+        store.update_proposal_status(self.conn, row_id, status)
+
+    def _match(self):
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                ]
+            }
+        )
+        pipeline.match_requirements(
+            [self.requirement], {"e": self.change}, self.sitedoc, adapter, run_id="new-run", store_conn=self.conn
+        )
+        return adapter.calls[0][1]
+
+    def test_rejected_precedent_is_injected_without_asserting_it_was_wrong(self):
+        self._seed_precedent("却下")
+        prompt = self._match()
+        self.assertIn("過去に却下されている", prompt)
+        self.assertIn("理由は文面上不明", prompt)
+        # 批評（codex round-4 #3）: 「判定は誤りだった」と断定する文言にしないこと
+        self.assertNotIn("誤りだった", prompt)
+
+    def test_approved_precedent_is_injected_as_weak_confirmation(self):
+        self._seed_precedent("承認")
+        prompt = self._match()
+        self.assertIn("受け入れられている", prompt)
+
+    def test_unreviewed_precedent_is_not_injected(self):
+        self._seed_precedent("未承認")
+        prompt = self._match()
+        self.assertNotIn("過去の人間の判断", prompt)
+
+    def test_no_precedents_omits_block_entirely(self):
+        prompt = self._match()
+        self.assertNotIn("過去の人間の判断", prompt)
 
 
 class MatchRequirementsBatchedTest(unittest.TestCase):

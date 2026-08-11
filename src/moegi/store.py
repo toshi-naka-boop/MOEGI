@@ -272,6 +272,30 @@ def get_proposal_for_review(conn: sqlite3.Connection, proposal_row_id: int) -> d
     return dict(zip(_PROPOSAL_COLUMNS, row)) if row else None
 
 
+def list_reviewed_precedents_for_item(
+    conn: sqlite3.Connection, item_label: str, *, limit: int = 3
+) -> list[dict[str, Any]]:
+    """design.md §6.7(b)・ledger N-8: 同じチェックリスト項目について過去に人間がレビュー済みの
+    判断を、新しい突合判定への弱い参考情報として返す。`sitedoc_item_id`をタグとして扱う
+    （新しいベクトルDB等は使わず、既存のimpacts/proposalsをそのまま再利用する）。
+
+    `未承認`（人間がまだ見ていない）は判断とみなさないため除外する。
+    """
+    rows = conn.execute(
+        """
+        SELECT proposals.status, changes.summary
+        FROM proposals
+        JOIN impacts ON impacts.row_id = proposals.impact_row_id
+        JOIN changes ON changes.row_id = impacts.change_row_id
+        WHERE impacts.sitedoc_item_id = ? AND proposals.status != '未承認'
+        ORDER BY proposals.row_id DESC
+        LIMIT ?
+        """,
+        (item_label, limit),
+    ).fetchall()
+    return [{"status": row[0], "change_summary": row[1]} for row in rows]
+
+
 def update_proposal_status(
     conn: sqlite3.Connection, proposal_row_id: int, status: str, after: str | None = None
 ) -> None:
