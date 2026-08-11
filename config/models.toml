@@ -37,10 +37,15 @@ model = "anthropic/claude-haiku-4.5"  # 候補1（暫定・未確定）
 # 候補2: model = "google/gemini-3.6-flash"        # $1.50 / $7.50
 # 候補3: model = "deepseek/deepseek-v4-flash"     # $0.147 / $0.295
 # 候補4: model = "orcarouter/fusion"              # 従量課金・単価は選択先依存で事前に確定できない
-# 候補5: model = "orcarouter/auto"                # ⚠️ 未疎通。裸の "auto" は model_not_found。
-#                                                 # 名前空間付きは未試行（ledger R-64）
+# ledger R-79: cloud_fallback_model で orcarouter/auto の疎通を実測確認済み（旧R-64「未疎通」を解消）。
+# 実測ではqwen/qwen3.7-plus等に解決される。主モデル失敗時、ローカルに落ちる前にこちらを試す。
+cloud_fallback_model = "orcarouter/auto"
 fallback_backend = "local"
-fallback_model = "7shi/tanuki-dpo-v1.0:latest"
+# ledger R-79（ユーザー決定・2026-08-11）: ローカル最終フォールバックをTanuki 7B→gemma4:26bに
+# 切り替え。reasoning_effort修正済み（N-11）でgemma4:26bはTanuki同等以上の速度・より高い
+# 精度が見込めるため、事務所内処理（要配慮個人情報を含まない本パイプライン）でも上位互換。
+fallback_model = "gemma4:26b"
+reasoning_effort = "none"
 price_usd_per_1m_in = 1.00
 price_usd_per_1m_out = 5.00
 
@@ -50,8 +55,10 @@ backend = "orca"
 model = "anthropic/claude-sonnet-5"
 # 最終ゴールデン実行時はここを切り替える:
 # model = "anthropic/claude-opus-5"   # $5.00 / $25.00
+cloud_fallback_model = "orcarouter/auto"  # ledger R-79
 fallback_backend = "local"
-fallback_model = "7shi/tanuki-dpo-v1.0:latest"
+fallback_model = "gemma4:26b"  # ledger R-79
+reasoning_effort = "none"
 price_usd_per_1m_in = 2.00
 price_usd_per_1m_out = 10.00
 
@@ -64,8 +71,10 @@ price_usd_per_1m_out = 10.00
 # 主因だったため、③-aと同格の高精度モデルに上げる。
 backend = "orca"
 model = "anthropic/claude-sonnet-5"
+cloud_fallback_model = "orcarouter/auto"  # ledger R-79
 fallback_backend = "local"
-fallback_model = "7shi/tanuki-dpo-v1.0:latest"
+fallback_model = "gemma4:26b"  # ledger R-79
+reasoning_effort = "none"
 price_usd_per_1m_in = 2.00
 price_usd_per_1m_out = 10.00
 # 一括判定は「全項目ぶんのJSON」を1回で吐かせるため、単発時より出力が長く時間もかかる。
@@ -78,8 +87,10 @@ local_timeout_seconds = 120.0
 # チェックリスト項目ラベルのみで、matchingと同じ理由で要配慮個人情報を含まない。
 backend = "orca"
 model = "anthropic/claude-haiku-4.5"
+cloud_fallback_model = "orcarouter/auto"  # ledger R-79
 fallback_backend = "local"
-fallback_model = "7shi/tanuki-dpo-v1.0:latest"
+fallback_model = "gemma4:26b"  # ledger R-79
+reasoning_effort = "none"
 price_usd_per_1m_in = 1.00
 price_usd_per_1m_out = 5.00
 # design.md §6.6（v10）: D2実測でdraftが最も長く、唯一ローカルtimeout（60秒）を
@@ -98,6 +109,7 @@ model = "gemma4:26b"
 reasoning_effort = "none"
 # 日報1件の構造化は評価付きでも数百字程度。大きめに余裕を持たせる。
 max_output_tokens = 900
-# gemma4:26bはTanukiより遅い（R-70実測: 単発呼び出し平均70秒）。コールドロード
-# （opus批評C-14実測: 18.1秒）も含めて余裕を持たせる。
+# R-70実測（単発呼び出し平均70秒）はreasoning_effort未設定時の値で、上記の修正後は
+# コールド17.8秒／ウォーム3.4秒まで改善している（D5実測・opus批評C-11で決着）。
+# それでも余裕を持たせておく。
 local_timeout_seconds = 180.0

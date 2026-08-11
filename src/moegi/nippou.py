@@ -17,6 +17,10 @@ design.md §6.6・N-11: structure() は要配慮個人情報（患者の看護�
 別フィールドで持つ。goal_ref が空のまま achievement を返した場合は「未達成」とみなす
 （目標を参照せずに書いた「評価」は条文の要求を満たさないため、これはLLMの判断に委ねず
 コード側で強制する）。
+
+ledger R-77・R-80: 処置内容はLLMの自由記述抽出に任せない（処置名の表記揺れ・誤認識リスク
+のため）。呼び出し側（webapp.py）がボタン選択式UIから確定した処置名のリストをそのまま
+structure() に渡し、NippouRecord.procedures にLLMを経由せず格納する。
 """
 
 from __future__ import annotations
@@ -33,7 +37,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # faster-whisperは重い依存（ctranslate2・モデルダウンロード）なので、実際に
 # transcribe()が音声入力を受けたときだけ遅延importする（テキストのみで動かす
 # 場合や、パイプライン側のimportコストを抑えるため）。
-_AUDIO_SUFFIXES = frozenset({".wav", ".mp3", ".m4a", ".flac", ".ogg"})
+# .webm はブラウザのMediaRecorder API既定の出力形式（webapp.py の録音UI・ledger R-80）。
+# faster-whisperはPyAV経由でデコードするためコンテナ形式は問わない。
+_AUDIO_SUFFIXES = frozenset({".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"})
 
 
 @dataclass
@@ -63,6 +69,7 @@ class NippouRecord:
     utterance_id: str
     items: list[NippouItem] = field(default_factory=list)
     evaluation: Evaluation | None = None
+    procedures: list[str] = field(default_factory=list)
 
 
 _STRUCTURE_PROMPT = """あなたは訪問看護の記録担当者です。以下の発話内容を、事業所チェックリストの
@@ -168,13 +175,19 @@ class NippouAgent:
         segments, _ = self._whisper_model.transcribe(str(path), language="ja")
         return "".join(segment.text for segment in segments).strip()
 
-    def structure(self, text: str, *, utterance_id: str = "utt") -> NippouRecord:
+    def structure(
+        self, text: str, *, utterance_id: str = "utt", procedures: list[str] | None = None
+    ) -> NippouRecord:
         """set_checklist で受け取った項目に照合した構造化記録を返す。
 
         design.md §6.5・批評C-5: 自由文生成ではなく「項目ごとの充足判定」を返す形式に
         固定する（非決定性対策）。評価付き項目（goal_refを持つ項目）があれば、
         evaluationフィールドを別途生成する（批評Y-2）。
+
+        procedures はLLMに通さず、そのままNippouRecordへ格納する（ledger R-77・R-80:
+        処置名は呼び出し側のボタン選択式UIで確定させ、LLMの表記揺れ・誤認識を避ける）。
         """
+        procedures = procedures or []
         if not self._checklist:
             raise ValueError("set_checklist() を先に呼ぶこと")
 
@@ -208,6 +221,7 @@ class NippouAgent:
                 utterance_id=utterance_id,
                 items=items,
                 evaluation=evaluation,
+                procedures=procedures,
             )
 
         payload = _extract_json_payload(result["text"]) or {}
@@ -237,6 +251,7 @@ class NippouAgent:
             utterance_id=utterance_id,
             items=items,
             evaluation=evaluation,
+            procedures=procedures,
         )
 
     def _build_evaluation(self, goal_item: ChecklistItem | None, raw: dict | None) -> Evaluation:

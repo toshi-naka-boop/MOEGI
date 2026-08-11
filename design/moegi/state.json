@@ -4,7 +4,7 @@
   "designVersion": "v13",
   "criticRound": 3,
   "approvedAt": "2026-08-08",
-  "openIssueIds": ["N-8", "N-4", "R-56", "R-64", "script-rework", "offline-fallback-review"],
+  "openIssueIds": ["N-8", "N-4", "R-56", "script-rework"],
   "requiredReads": ["design.md", "ledger.md"],
   "quickOverview": "overview.md（design.mdを可視化した要約。全体像・詰まり所を先に把握したい時に読む）",
   "progress": {
@@ -16,22 +16,20 @@
     "D4": "✅完全クローズ（2026-08-11ユーザー確認済み）。承認UI(FastAPI)＋原文トレース(G2)＋薄いE2E＋G9-b常時表示。ブラウザ実機で承認/却下/編集の3状態遷移とSQLite永続化を確認済み",
     "N-11": "完了（2026-08-11）。プライバシー境界を「事業所文書」→「要配慮個人情報」に訂正。③-b突合・④更新案生成をクラウド既定に変更（claude-sonnet-5/haiku-4.5）。批評2巡（opus design-critic + sonnetクロス、codexトークン上限のため代替）でHigh10件検出、ユーザーが実ワークフロー（GWS音声入力主・日報はバッチ処理・Tanukiフォールバック維持）を明確にして主要懸念を解消。実機確認済み（--label c、47.5秒、backend=orca全工程、過剰検出6→1項目に改善）。goal_ref非流出の回帰テスト追加。dev_local_only既定をfalseに変更",
     "D5": "✅完了（2026-08-11・ユーザー『全て承認するので動く形まで一気に進めて』により無停止で実施）。①G9-b再測定: 再現率0.0%→83.3%（誤検出率も26.2%→35.7%に上昇=N-8継続課題）。②reasoning_effort実装・opus批評C-11を実機で決着（gemma4:26b structure()がコールド17.8秒/ウォーム3.4秒、旧Tanuki同等）。③日報エージェント実装（nippou.py、テスト16件、承認UI統合）。④D1相当ゲート実測（スワップ+6.1GB、24GBに余裕なしだが動作）。⑤FAX様式PDF生成（fax.py・WeasyPrint、Homebrewでpango等を新規インストール、承認UI統合）。⑥オフライン薄通し確認（全工程ローカルフォールバックで完走）。全て実機・ブラウザで動作確認済み",
-    "D5-followup": "✅完了（2026-08-11・ユーザーレビューを受けた2件の追加対応）。①G9-b常時バッジを承認UIから削除（R-75・デモの邪魔という指摘）。開示先はピッチ・審査対話に変更。②FAX配信履歴（監査ログ）を`fax_deliveries`テーブルで永続化（R-76）——run_id・proposal_row_ids・生成時刻を記録し、run閲覧ページに一覧表示。テスト3件追加・実機確認済み。副産物: pytestが`.venv`から消えていたため再インストールしpyproject.tomlのdev依存に記録"
+    "D5-followup": "✅完了（2026-08-11・ユーザーレビューを受けた2件の追加対応）。①G9-b常時バッジを承認UIから削除（R-75・デモの邪魔という指摘）。開示先はピッチ・審査対話に変更。②FAX配信履歴（監査ログ）を`fax_deliveries`テーブルで永続化（R-76）——run_id・proposal_row_ids・生成時刻を記録し、run閲覧ページに一覧表示。テスト3件追加・実機確認済み。副産物: pytestが`.venv`から消えていたため再インストールしpyproject.tomlのdev依存に記録",
+    "D5-followup2": "✅完了（2026-08-11〜12・ユーザーレビューを受けた4件の追加対応）。①承認UIのUX修正2件（ホームリンク・過去実行の表示、R-78）。②ORCA3段フォールバック実装——ORCAが実はAnthropic/Gemini/Qwen等のマルチプロバイダルーターだと実測で判明（R-64解消）。「主モデル→orcarouter/auto→ローカル」に拡張し、②③-a③-b④のローカル最終フォールバックもTanuki 7B→gemma4:26bに切替（R-79）。実機で3段フォールバックの実動作を確認済み。③モバイル音声入力UI＋処置ボタンをMOEGI本体（/nippou）に実装（R-80）——MediaRecorder APIでの録音→.webmアップロード→faster-whisper文字起こし、処置内容はCSS `:has()`のピルボタンで多重選択しLLMを経由せず格納。実音声ファイルでのアップロード完走を確認済み（マイク録音自体は実機スマホでの確認が別途必要）"
   },
-  "nextAction": "ユーザー起床後、D5成果物（http://localhost:8420 の /nippou・/runs/{id}/fax-preview 含む）を確認。確認後、D6（LINEキュー型チャネル・G6接続点・§7台本#6の作り直し）へ",
+  "nextAction": "ユーザーが実機のスマホ・タブレットで /nippou の録音UIを確認。確認後、D6（LINEキュー型チャネル・G6接続点・§7台本#6の作り直し）へ",
   "commitPolicy": "D区切りごとにコミットする（feat: D1 / feat: D2 ...）。バグ修正はfix:で分離。ユーザー決定 2026-08-09",
-  "blockedOn": {
-    "R-64": "orcarouter/auto の名前空間付き指定の疎通確認（ORCA接続可能なセッションで）"
-  },
   "carryOverToD6": {
     "script-rework": "§7台本#6を実ワークフロー（現場録音→事務所バッチ処理）に合わせて作り直す",
-    "offline-fallback-review": "③-b/④のオフライン緊急フォールバック機構の要否とモデル選定（ユーザー指摘: Tanukiにこだわる意味が不明。日報アプリ実装時に再検討）",
     "n8-overdetection": "誤検出率35.7%（G9-b再測定で悪化が数値化）。D6〜D7で対処を検討",
     "line-queue": "LINEキュー型チャネル（store-and-forward・送信待ちバッジ・復帰時自動フラッシュ）は未実装",
-    "checklist-nippou-connection": "承認済みチェックリスト→日報エージェントの接続点1箇所（setChecklist呼び出し）はまだ配線されていない"
+    "checklist-nippou-connection": "承認済みチェックリスト→日報エージェントの接続点1箇所（setChecklist呼び出し）はまだ配線されていない",
+    "mobile-nippou-real-device-check": "R-80の録音UIは実機スマホ・タブレットのマイク許可フロー・タッチ操作で未確認（ヘッドレスブラウザでは検証不可）"
   },
   "futureNippouAppNotes": {
-    "procedures-button-ui": "R-77（2026-08-11）: 訪問看護の日報に必要な項目を調査したところ「処置内容の記録」が標準的だが、ユーザーの意図はMOEGIのチェックリストではなく別途つくる予定の日報録音アプリの話だった。ユーザー決定: 処置内容はLLM自由記述に任せず、ボタン選択式（複数選択可）の固定語彙UIにする（LLMの表記揺れ・誤認識リスクを避けるため）。MOEGI本体（nippou.py）は変更なし"
+    "procedures-button-ui": "R-77（2026-08-11）→R-80（2026-08-11〜12）で実装済み: 処置内容はLLM自由記述に任せず、ボタン選択式（複数選択可）の固定語彙UIにした（LLMの表記揺れ・誤認識リスクを避けるため）。当初は別途つくる予定の日報録音アプリ向けの設計メモだったが、ユーザー希望でMOEGI本体（/nippou）にプロトタイプとして実装。独立した本格的なモバイルアプリを別途作るかどうかは未定"
   },
-  "lastUpdated": "2026-08-11"
+  "lastUpdated": "2026-08-12"
 }

@@ -22,9 +22,18 @@ design.md §6.1「ルーティングの第一原則」（v13・ledger N-11）:
     項目ラベルしか扱わず要配慮個人情報を含まないためクラウド既定に変更した）。
     設定でクラウドを指定されても拒否するのは LOCAL_ONLY_STAGES に載っている工程だけ。
 
-design.md §6.6「障害時の状態遷移」:
-    - 各クラウド呼び出しにtimeout（実測の3倍・上限20秒）。超過で即ローカルへフォールバック
-    - 連続N回失敗でcircuit breakerを開き、以降はローカル直行（毎回timeoutを待たない）
+design.md §6.6「障害時の状態遷移」（v14・ledger R-79で3段に拡張）:
+    - 各クラウド呼び出しにtimeout（実測の3倍・上限20秒）。超過で即座に次段へフォールバック
+    - 主モデル呼び出しが失敗したら、cloud_fallback_model（設定されていれば）でORCAに
+      再試行する。ORCAはAnthropic/Gemini/Qwen等を1エンドポイントで呼び分けるルーターで
+      （実測確認済み・ledger R-79）、主モデルだけがレート制限等で落ちているケースでは
+      ローカル7Bより高品質な結果を維持できる。この再試行が成功した場合は
+      「ORCAへの到達性」自体は健全と判断し、circuit breakerの失敗カウントは増やさない
+    - 主モデル・cloud_fallback_model の両方が失敗して初めてローカルへフォールバックし、
+      その時点でcircuit breakerの失敗カウントを1つ増やす（ORCAエンドポイント自体が
+      不調である可能性を示すのはこのケースだけのため）
+    - 連続N回失敗でcircuit breakerを開き、以降はcloud_fallback_modelも試さずローカル直行
+      （毎回2回ぶんのtimeoutを待たない）
     - breakerはcooldown経過後、次の1回だけ試行を許す（半開）
     - v10: ローカル呼び出し自体がtimeoutした場合はフォールバック先が無い。例外を上げず、
       text=""・timeout=Trueを付けて結果を返す（呼び出し元が「判定不能」として続行する）。
@@ -101,6 +110,9 @@ class StageConfig:
     reasoning_effort: str | None = None  # opus批評C-11・ledger N-11: gemma4:26b等の
     # reasoningモデルは、これを付けないと出力がreasoningトークンに全消費されcontentが
     # 空になる（実測: max_tokens=900で21秒・本文0字 → "none"指定で10秒・正しいJSON）。
+    cloud_fallback_model: str = ""  # ledger R-79: 主モデル失敗時にローカルへ落ちる前に
+    # ORCA経由で試す別プロバイダ（例: "orcarouter/auto"）。空文字なら2段（従来どおり
+    # 主モデル→ローカル）のまま。LOCAL_ONLY_STAGES（backend="local"固定）には無関係。
 
 
 def load_model_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
@@ -136,6 +148,7 @@ def load_model_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
                 else None
             ),
             reasoning_effort=raw.get("reasoning_effort"),
+            cloud_fallback_model=raw.get("cloud_fallback_model", ""),
         )
         if stage in LOCAL_ONLY_STAGES and cfg.backend != "local":
             raise ConfigError(
@@ -257,9 +270,11 @@ class LLMAdapter:
             return self._call_local(model, prompt, opts, degraded=False, fallback_level=0)
 
         # ここに来るのはbackend="orca"かつdev_local_only=falseの場合（既定では全工程）。
+        # fallback_level: 0=クラウド主モデル成功 / 1=cloud_fallback_model成功 /
+        # 2=主・cloud_fallback共に失敗してローカルへ / 3=breakerが開いておりどちらも試さずローカルへ
         if self._breaker_is_open():
             return self._call_local(
-                stage_cfg.fallback_model, prompt, opts, degraded=True, fallback_level=2
+                stage_cfg.fallback_model, prompt, opts, degraded=True, fallback_level=3
             )
 
         try:
@@ -271,10 +286,31 @@ class LLMAdapter:
                 price_jpy_per_1k_out=stage_cfg.price_jpy_per_1k_out,
             )
         except (httpx.HTTPError, OrcaCredentialsMissing):
-            self._record_cloud_failure()
-            return self._call_local(
-                stage_cfg.fallback_model, prompt, opts, degraded=True, fallback_level=1
-            )
+            pass  # 主モデル失敗。ledger R-79: ローカルに落ちる前にORCA別プロバイダを試す
+
+        if stage_cfg.cloud_fallback_model:
+            try:
+                result = self._call_orca(
+                    stage_cfg.cloud_fallback_model,
+                    prompt,
+                    opts,
+                    # orcarouter/auto等は解決先モデルが実行時まで不明で単価表が引けないため
+                    # 0円扱い（ローカルのcost_jpy=0と同じ簡略化）。
+                    price_jpy_per_1k_in=0.0,
+                    price_jpy_per_1k_out=0.0,
+                )
+                result["degraded"] = True
+                result["fallback_level"] = 1
+                return result
+            except (httpx.HTTPError, OrcaCredentialsMissing):
+                pass  # 別プロバイダも失敗＝ORCAエンドポイント自体が不調の可能性
+
+        # 主モデル・cloud_fallback_model（設定されていれば）の両方が失敗した場合のみ
+        # 「ORCAへの到達性」に疑いありと記録する（片方の成功はエンドポイント健全の証拠）。
+        self._record_cloud_failure()
+        return self._call_local(
+            stage_cfg.fallback_model, prompt, opts, degraded=True, fallback_level=2
+        )
 
     def complete_raw(self, backend: str, model: str, prompt: str, opts: dict | None = None) -> dict:
         """backend/modelを直接指定して呼び出す（stageルーティングを経由しない）。

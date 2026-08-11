@@ -145,6 +145,25 @@ class LoadModelConfigTest(unittest.TestCase):
             self.assertEqual(cfg["stages"]["nippou"].reasoning_effort, "none")
             self.assertIsNone(cfg["stages"]["matching"].reasoning_effort)
 
+    def test_cloud_fallback_model_defaults_to_empty_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_toml(Path(tmp), VALID_CONFIG)
+            cfg = load_model_config(path)
+            self.assertEqual(cfg["stages"]["diff"].cloud_fallback_model, "")
+
+    def test_cloud_fallback_model_is_loaded_from_config(self):
+        config = VALID_CONFIG.replace(
+            '[diff]\nbackend = "orca"\nmodel = "candidate-a"\n'
+            'fallback_backend = "local"\nfallback_model = "tanuki"',
+            '[diff]\nbackend = "orca"\nmodel = "candidate-a"\n'
+            'cloud_fallback_model = "orcarouter/auto"\n'
+            'fallback_backend = "local"\nfallback_model = "tanuki"',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_toml(Path(tmp), config)
+            cfg = load_model_config(path)
+            self.assertEqual(cfg["stages"]["diff"].cloud_fallback_model, "orcarouter/auto")
+
 
 class AdapterRoutingTest(unittest.TestCase):
     def _make_adapter(
@@ -223,12 +242,13 @@ class AdapterRoutingTest(unittest.TestCase):
         self.assertEqual(result["fallback_level"], 1)
 
     def test_missing_orca_credentials_falls_back_to_local_without_network_call(self):
-        # 環境変数にもキーチェーンにもキーが無い場合
+        # 環境変数にもキーチェーンにもキーが無い場合。VALID_CONFIGはcloud_fallback_model
+        # 未設定なので、主モデル失敗（credentials無し）→即ローカル（fallback_level=2）。
         adapter, client = self._make_adapter(env={"ORCA_BASE_URL": "", "ORCA_API_KEY": ""})
         result = adapter.complete("diff", "prompt")
         self.assertEqual(result["backend"], "local:tanuki")
         self.assertTrue(result["degraded"])
-        self.assertEqual(result["fallback_level"], 1)
+        self.assertEqual(result["fallback_level"], 2)
         self.assertTrue(all("fake-orca" not in c for c in client.calls))
 
     def test_api_key_falls_back_to_keychain_when_env_is_unset(self):
@@ -257,6 +277,7 @@ class AdapterRoutingTest(unittest.TestCase):
         )
 
     def test_circuit_breaker_opens_after_threshold_failures_and_skips_orca(self):
+        # VALID_CONFIGはcloud_fallback_model未設定なので、主モデル失敗→即ローカル（level=2）。
         adapter, client = self._make_adapter(env={"ORCA_BASE_URL": "http://fake-orca", "ORCA_API_KEY": "k"})
         for _ in range(CIRCUIT_BREAKER_THRESHOLD):
             client.orca_queue.append(httpx.HTTPError("boom"))
@@ -264,17 +285,58 @@ class AdapterRoutingTest(unittest.TestCase):
         for _ in range(CIRCUIT_BREAKER_THRESHOLD):
             result = adapter.complete("diff", "prompt")
             self.assertTrue(result["degraded"])
-            self.assertEqual(result["fallback_level"], 1)
+            self.assertEqual(result["fallback_level"], 2)
 
         orca_calls_before = len([c for c in client.calls if "fake-orca" in c])
         self.assertEqual(orca_calls_before, CIRCUIT_BREAKER_THRESHOLD)
 
-        # breakerが開いた後は、ORCAへ接続を試みずに即ローカルへ（fallback_level=2）
+        # breakerが開いた後は、ORCAへ接続を試みずに即ローカルへ（fallback_level=3・ledger R-79）
         result = adapter.complete("diff", "prompt")
         self.assertTrue(result["degraded"])
-        self.assertEqual(result["fallback_level"], 2)
+        self.assertEqual(result["fallback_level"], 3)
         orca_calls_after = len([c for c in client.calls if "fake-orca" in c])
         self.assertEqual(orca_calls_after, orca_calls_before)  # 増えていない＝ORCAへ到達していない
+
+    def test_cloud_fallback_model_is_tried_before_local_and_does_not_count_as_breaker_failure(self):
+        # ledger R-79: 主モデル失敗→cloud_fallback_model（ORCA別プロバイダ）で成功したら
+        # ローカルへは落ちず、breakerの失敗カウントも増やさない（エンドポイント自体は健全なため）。
+        config = VALID_CONFIG.replace(
+            '[diff]\nbackend = "orca"\nmodel = "candidate-a"\n'
+            'fallback_backend = "local"\nfallback_model = "tanuki"',
+            '[diff]\nbackend = "orca"\nmodel = "candidate-a"\n'
+            'cloud_fallback_model = "orcarouter/auto"\n'
+            'fallback_backend = "local"\nfallback_model = "tanuki"',
+        )
+        adapter, client = self._make_adapter(
+            config_text=config, env={"ORCA_BASE_URL": "http://fake-orca", "ORCA_API_KEY": "k"}
+        )
+        client.orca_queue.append(httpx.HTTPError("boom"))
+        client.orca_queue.append(_FakeResponse(_chat_response_body("別プロバイダ応答")))
+        result = adapter.complete("diff", "prompt")
+        self.assertEqual(result["backend"], "orca:orcarouter/auto")
+        self.assertTrue(result["degraded"])
+        self.assertEqual(result["fallback_level"], 1)
+        self.assertTrue(all("fake-local" not in c for c in client.calls))
+        self.assertEqual(adapter._consecutive_failures, 0)  # breakerの失敗カウントは増えていない
+
+    def test_falls_back_to_local_when_both_primary_and_cloud_fallback_fail(self):
+        config = VALID_CONFIG.replace(
+            '[diff]\nbackend = "orca"\nmodel = "candidate-a"\n'
+            'fallback_backend = "local"\nfallback_model = "tanuki"',
+            '[diff]\nbackend = "orca"\nmodel = "candidate-a"\n'
+            'cloud_fallback_model = "orcarouter/auto"\n'
+            'fallback_backend = "local"\nfallback_model = "tanuki"',
+        )
+        adapter, client = self._make_adapter(
+            config_text=config, env={"ORCA_BASE_URL": "http://fake-orca", "ORCA_API_KEY": "k"}
+        )
+        client.orca_queue.append(httpx.HTTPError("boom"))
+        client.orca_queue.append(httpx.HTTPError("boom again"))
+        result = adapter.complete("diff", "prompt")
+        self.assertEqual(result["backend"], "local:tanuki")
+        self.assertTrue(result["degraded"])
+        self.assertEqual(result["fallback_level"], 2)
+        self.assertEqual(adapter._consecutive_failures, 1)
 
     def test_local_timeout_does_not_raise_and_marks_result_timeout(self):
         # design.md §6.6（v10）: ローカルはフォールバック先が無いため、timeoutで例外を

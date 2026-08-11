@@ -125,6 +125,32 @@ class StructureTest(unittest.TestCase):
         record = agent.structure("発話")
         self.assertEqual([i.filled for i in record.items], [False, False])
 
+    def test_procedures_are_passed_through_without_llm(self):
+        # ledger R-77・R-80: 処置名はボタン選択式UI（呼び出し側）で確定させ、LLMを経由しない。
+        adapter = _FakeAdapter(
+            [json.dumps({"items": [{"item_id": "1", "filled": True, "value": "x"}]}, ensure_ascii=False)]
+        )
+        agent = nippou.NippouAgent(adapter)
+        agent.set_checklist(self.items)
+        record = agent.structure("発話", procedures=["創傷処置", "吸引"])
+        self.assertEqual(record.procedures, ["創傷処置", "吸引"])
+
+    def test_procedures_default_to_empty_list(self):
+        adapter = _FakeAdapter(
+            [json.dumps({"items": [{"item_id": "1", "filled": True, "value": "x"}]}, ensure_ascii=False)]
+        )
+        agent = nippou.NippouAgent(adapter)
+        agent.set_checklist(self.items)
+        record = agent.structure("発話")
+        self.assertEqual(record.procedures, [])
+
+    def test_procedures_are_preserved_on_timeout(self):
+        adapter = _FakeAdapter([_TIMEOUT])
+        agent = nippou.NippouAgent(adapter)
+        agent.set_checklist(self.items)
+        record = agent.structure("発話", procedures=["点滴"])
+        self.assertEqual(record.procedures, ["点滴"])
+
 
 class EvaluationTest(unittest.TestCase):
     """design.md §6.5「評価の記録」の実体要件（批評Y-2）。"""

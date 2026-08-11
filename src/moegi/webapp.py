@@ -15,15 +15,33 @@ G9-b実測値（再現率・誤検出率）はUIには出さない（ユーザ�
 from __future__ import annotations
 
 import html
+import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from moegi import fax, ingest, llm, nippou, pipeline, store
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _FAX_OUTPUT_DIR = _REPO_ROOT / "data" / "fax_previews"
+
+# ledger R-77・R-80: 処置内容はLLMの自由記述抽出に任せず、ボタン選択式（複数選択可）にする
+# （処置名の表記揺れ・誤認識リスクを避けるため）。design.md §6.5「処置入力のボタン選択UI
+# （v6追加）」が既に「処置マスタ10項目固定」を規定済みだったため、項目数をそれに合わせた。
+# 訪問看護の一般的な処置区分の暫定リスト——実運用では事業所側の語彙に差し替える想定。
+_PROCEDURE_OPTIONS = (
+    "創傷処置（褥瘡ケア等）",
+    "点滴・注射",
+    "吸引",
+    "カテーテル管理",
+    "リハビリテーション",
+    "服薬管理・指導",
+    "バイタル測定",
+    "排泄ケア",
+    "清潔ケア（入浴・清拭）",
+    "その他",
+)
 
 app = FastAPI(title="MOEGI 承認UI")
 
@@ -73,12 +91,28 @@ _PAGE_STYLE = """
   h2 { font-size: 1.05rem; color: var(--ink-soft); font-weight: 600; margin: 2rem 0 0.75rem; }
   a { color: var(--moegi-deep); }
 
+  .home-nav { margin: 0.75rem 0 0; font-size: 0.85rem; }
+  .home-nav a { text-decoration: none; font-weight: 600; }
+  .home-nav a:hover { text-decoration: underline; }
+
   .run-warning {
     background: var(--warn-soft); border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0;
     padding: 0.6rem 0.9rem; font-size: 0.85rem; color: var(--ink);
   }
   .run-form { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.75rem; flex-wrap: wrap; }
   select { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--paper-raised); color: var(--ink); }
+
+  .procedure-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0 1.25rem; }
+  .procedure-pill {
+    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 0.9rem;
+    border: 1px solid var(--line); border-radius: 99px; background: var(--paper-raised);
+    font-size: 0.88rem; cursor: pointer; user-select: none; min-height: 44px;
+  }
+  .procedure-pill:has(input:checked) { background: var(--moegi-soft); border-color: var(--moegi); color: var(--moegi-deep); font-weight: 600; }
+  .procedure-pill input { accent-color: var(--moegi-deep); width: 1.1rem; height: 1.1rem; }
+  .record-controls { display: flex; align-items: center; gap: 0.75rem; margin: 0.5rem 0 1.25rem; }
+  #record-btn { min-height: 48px; padding: 0.6rem 1.3rem; font-size: 1rem; }
+  #nippou-form > label { display: block; font-weight: 600; margin: 1rem 0 0.3rem; }
 
   button {
     cursor: pointer; font: inherit; font-weight: 600; border: none; border-radius: 6px;
@@ -137,11 +171,12 @@ _PAGE_STYLE = """
 
 
 def _render_page(body: str) -> HTMLResponse:
+    nav = "<nav class='home-nav'><a href='/'>← MOEGI ホーム</a></nav>"
     return HTMLResponse(
         f"<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
         f"<title>MOEGI 承認UI</title>{_PAGE_STYLE}</head>"
-        f"<body>{body}</body></html>"
+        f"<body>{nav}{body}</body></html>"
     )
 
 
@@ -149,12 +184,17 @@ def _render_page(body: str) -> HTMLResponse:
 def index() -> HTMLResponse:
     conn = _db_conn()
     try:
-        run_ids = [
-            row[0]
-            for row in conn.execute(
-                "SELECT DISTINCT run_id FROM proposals ORDER BY row_id DESC LIMIT 20"
-            ).fetchall()
-        ]
+        past_runs = conn.execute(
+            """
+            SELECT proposals.run_id, MIN(changes.label), MIN(changes.kind)
+            FROM proposals
+            JOIN impacts ON impacts.row_id = proposals.impact_row_id
+            JOIN changes ON changes.row_id = impacts.change_row_id
+            GROUP BY proposals.run_id
+            ORDER BY MAX(proposals.row_id) DESC
+            LIMIT 20
+            """
+        ).fetchall()
     finally:
         conn.close()
 
@@ -166,9 +206,13 @@ def index() -> HTMLResponse:
 
     run_list = (
         "<ul class='run-list'>"
-        + "".join(f"<li><a href='/runs/{html.escape(rid)}'>{html.escape(rid)}</a></li>" for rid in run_ids)
+        + "".join(
+            f"<li><a href='/runs/{html.escape(run_id)}'>対象条文 {html.escape(label)}（{html.escape(kind)}）</a>"
+            f" <span class='meta'>{html.escape(run_id[:8])}</span></li>"
+            for run_id, label, kind in past_runs
+        )
         + "</ul>"
-        if run_ids
+        if past_runs
         else "<p>まだ分析結果がありません。下のフォームから実行してください。</p>"
     )
 
@@ -425,8 +469,15 @@ def _nippou_record_html(record: nippou.NippouRecord) -> str:
           <tr><th>ステータス</th><td><span class="chip status-chip">{'記入済み' if ev.filled else '未記入'}</span></td></tr>
         </table>
         """
+    procedures_html = (
+        "<p class='meta'>処置内容の選択はありません。</p>"
+        if not record.procedures
+        else "<p>" + "".join(f"<span class='chip'>{html.escape(p)}</span> " for p in record.procedures) + "</p>"
+    )
     return f"""
     <h2>構造化結果（utterance_id={html.escape(record.utterance_id)}）</h2>
+    <h3>処置内容（ボタン選択・ledger R-77）</h3>
+    {procedures_html}
     <table style="width:100%; border-collapse: collapse;">{rows}</table>
     {evaluation_html}
     """
@@ -434,32 +485,109 @@ def _nippou_record_html(record: nippou.NippouRecord) -> str:
 
 @app.get("/nippou", response_class=HTMLResponse)
 def nippou_form() -> HTMLResponse:
-    body = """
+    procedure_checkboxes = "".join(
+        f"<label class='procedure-pill'><input type='checkbox' name='procedures' value='{html.escape(p)}'>"
+        f"{html.escape(p)}</label>"
+        for p in _PROCEDURE_OPTIONS
+    )
+    body = f"""
     <h1>日報エージェント（design.md §6.5）</h1>
     <p class="run-warning">⚠️ 要配慮個人情報を扱うため常にローカル（gemma4:26b）で処理します（ledger N-11）。
-    実運用ではGWSドキュメントの音声入力を主として想定していますが、ここでは発話テキストを
-    直接貼り付けて structure() を試せます（design.md §6.5 G7: テキスト入力でも同じ経路）。</p>
-    <form method="post" action="/nippou/structure">
-      <label for="utterance">発話内容（テキスト）</label><br>
-      <textarea id="utterance" name="utterance" rows="4" style="width:100%"
+    訪問時の移動中、または現場での録音許可が取れている場合はマイクボタンで録音してください
+    （ledger R-80）。電波が無い場所でも録音自体はでき、あとで構造化できます。</p>
+
+    <form method="post" action="/nippou/structure" enctype="multipart/form-data" id="nippou-form">
+      <label>処置内容（複数選択可・ledger R-77: LLMではなくボタン選択で確定）</label>
+      <div class="procedure-buttons">{procedure_checkboxes}</div>
+
+      <label>録音</label>
+      <div class="record-controls">
+        <button type="button" id="record-btn">🎙 録音開始</button>
+        <span id="record-status" class="meta"></span>
+      </div>
+      <input type="file" name="audio" id="audio-input" accept="audio/*" style="display:none">
+
+      <label for="utterance_text">またはテキストで直接入力</label>
+      <textarea id="utterance_text" name="utterance_text" rows="4" style="width:100%"
         placeholder="訪問終了しました。血圧128の78、体温36.5度、脈拍70、呼吸数16でした。特記事項はありません。"></textarea>
+
       <button type="submit">構造化する</button>
     </form>
+    <script>
+    (function() {{
+      var recordBtn = document.getElementById('record-btn');
+      var statusEl = document.getElementById('record-status');
+      var audioInput = document.getElementById('audio-input');
+      var mediaRecorder = null;
+      var chunks = [];
+
+      if (!navigator.mediaDevices || !window.MediaRecorder) {{
+        recordBtn.disabled = true;
+        statusEl.textContent = 'このブラウザは録音に対応していません。テキスト入力をご利用ください。';
+        return;
+      }}
+
+      recordBtn.addEventListener('click', function() {{
+        if (mediaRecorder && mediaRecorder.state === 'recording') {{
+          mediaRecorder.stop();
+          return;
+        }}
+        navigator.mediaDevices.getUserMedia({{audio: true}}).then(function(stream) {{
+          chunks = [];
+          mediaRecorder = new MediaRecorder(stream);
+          mediaRecorder.ondataavailable = function(e) {{ chunks.push(e.data); }};
+          mediaRecorder.onstop = function() {{
+            var blob = new Blob(chunks, {{type: 'audio/webm'}});
+            var file = new File([blob], 'nippou.webm', {{type: 'audio/webm'}});
+            var dt = new DataTransfer();
+            dt.items.add(file);
+            audioInput.files = dt.files;
+            stream.getTracks().forEach(function(t) {{ t.stop(); }});
+            recordBtn.textContent = '🎙 録音開始';
+            statusEl.textContent = '録音完了。内容を確認したら「構造化する」を押してください。';
+          }};
+          mediaRecorder.start();
+          recordBtn.textContent = '⏹ 録音停止';
+          statusEl.textContent = '録音中…';
+        }}).catch(function(err) {{
+          statusEl.textContent = 'マイクを使用できませんでした: ' + err.message;
+        }});
+      }});
+
+      document.getElementById('nippou-form').addEventListener('submit', function() {{
+        this.querySelector('button[type=submit]').disabled = true;
+      }});
+    }})();
+    </script>
     """
     return _render_page(body)
 
 
 @app.post("/nippou/structure", response_class=HTMLResponse)
-def nippou_structure(utterance: str = Form(...)) -> HTMLResponse:
+def nippou_structure(
+    utterance_text: str = Form(""),
+    procedures: list[str] = Form([]),
+    audio: UploadFile | None = File(None),
+) -> HTMLResponse:
     sitedoc = pipeline.load_sitedoc()
     adapter = llm.LLMAdapter()
+    tmp_path: Path | None = None
     try:
         agent = nippou.NippouAgent(adapter)
         agent.set_checklist(sitedoc.items)
-        text = agent.transcribe(utterance)
-        record = agent.structure(text, utterance_id=store.new_run_id()[:8])
+        if audio is not None and audio.filename:
+            suffix = Path(audio.filename).suffix or ".webm"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(audio.file.read())
+                tmp_path = Path(tmp.name)
+            text = agent.transcribe(tmp_path)
+        else:
+            text = agent.transcribe(utterance_text)
+        record = agent.structure(text, utterance_id=store.new_run_id()[:8], procedures=procedures)
     finally:
         adapter.close()
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
     body = f"""
     <h1>日報エージェント（design.md §6.5）</h1>
