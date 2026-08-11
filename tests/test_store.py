@@ -222,5 +222,37 @@ class SavePipelineResultTest(unittest.TestCase):
         self.assertIsNone(row["evidence_quote"])
 
 
+class FaxDeliveryTest(unittest.TestCase):
+    """design.md §5.3・ledger R-76: FAX配信履歴（監査ログ）の永続化。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.conn = store.connect(Path(self.tmpdir.name) / "test.db")
+        self.addCleanup(self.conn.close)
+        self.run_id = store.new_run_id()
+
+    def test_save_and_list_fax_delivery(self):
+        store.save_fax_delivery(
+            self.conn, run_id=self.run_id, proposal_row_ids=[1, 2, 3], file_path="/tmp/x.pdf"
+        )
+        deliveries = store.list_fax_deliveries(self.conn, self.run_id)
+        self.assertEqual(len(deliveries), 1)
+        self.assertEqual(deliveries[0]["proposal_row_ids"], [1, 2, 3])
+        self.assertEqual(deliveries[0]["file_path"], "/tmp/x.pdf")
+        self.assertIsNotNone(deliveries[0]["generated_at"])
+
+    def test_list_fax_deliveries_orders_newest_first(self):
+        store.save_fax_delivery(self.conn, run_id=self.run_id, proposal_row_ids=[1], file_path="/tmp/a.pdf")
+        store.save_fax_delivery(self.conn, run_id=self.run_id, proposal_row_ids=[1, 2], file_path="/tmp/b.pdf")
+        deliveries = store.list_fax_deliveries(self.conn, self.run_id)
+        self.assertEqual([d["file_path"] for d in deliveries], ["/tmp/b.pdf", "/tmp/a.pdf"])
+
+    def test_list_fax_deliveries_scopes_by_run_id(self):
+        store.save_fax_delivery(self.conn, run_id=self.run_id, proposal_row_ids=[1], file_path="/tmp/a.pdf")
+        other_run = store.new_run_id()
+        self.assertEqual(store.list_fax_deliveries(self.conn, other_run), [])
+
+
 if __name__ == "__main__":
     unittest.main()

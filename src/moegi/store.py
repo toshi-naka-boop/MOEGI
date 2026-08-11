@@ -16,6 +16,7 @@ design.md §6.4:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from pathlib import Path
@@ -74,6 +75,14 @@ CREATE TABLE IF NOT EXISTS proposals (
     after TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT '未承認',
     decided_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fax_deliveries (
+    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    proposal_row_ids TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    generated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -281,6 +290,38 @@ def update_proposal_status(
             (status, proposal_row_id),
         )
     conn.commit()
+
+
+def save_fax_delivery(
+    conn: sqlite3.Connection, *, run_id: str, proposal_row_ids: list[int], file_path: str
+) -> None:
+    """design.md §5.3 即時チャネルの配信履歴（監査ログ）を1件記録する。
+
+    FAX様式PDFはリクエストのたびに再生成されるため、「いつ・どのproposalを含んだPDFを
+    作ったか」はこのテーブルにしか残らない（ユーザー指摘・2026-08-11、ledger R-76）。
+    """
+    conn.execute(
+        "INSERT INTO fax_deliveries (run_id, proposal_row_ids, file_path) VALUES (?, ?, ?)",
+        (run_id, json.dumps(proposal_row_ids), file_path),
+    )
+    conn.commit()
+
+
+def list_fax_deliveries(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT row_id, proposal_row_ids, file_path, generated_at "
+        "FROM fax_deliveries WHERE run_id = ? ORDER BY row_id DESC",
+        (run_id,),
+    ).fetchall()
+    return [
+        {
+            "row_id": row[0],
+            "proposal_row_ids": json.loads(row[1]),
+            "file_path": row[2],
+            "generated_at": row[3],
+        }
+        for row in rows
+    ]
 
 
 def record_from_llm_result(conn: sqlite3.Connection, run_id: str, stage: str, result: dict) -> None:

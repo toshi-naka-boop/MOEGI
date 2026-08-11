@@ -7,14 +7,14 @@ design.md §14 の技術スタック決定どおり FastAPI・サーバーレン
 
 G2「根拠が辿れる」: 各更新案の行に <details> で原文トレース（新旧本文・
 根拠の引用箇所）を埋め込み、開閉の1操作で到達できるようにする。
-G9-b「再現率が測られ、開示されている」: config/g9_latest.json の実測値を
-ページ上部に常時表示する（数値目標は置かず、開示すること自体を合格条件とする）。
+
+G9-b実測値（再現率・誤検出率）はUIには出さない（ユーザー決定・2026-08-11、ledger R-75）。
+デモの邪魔になるため、ピッチ資料側で説明する。実測自体は引き続き config/g9_latest.json に残す。
 """
 
 from __future__ import annotations
 
 import html
-import json
 from pathlib import Path
 
 from fastapi import FastAPI, Form
@@ -23,7 +23,6 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from moegi import fax, ingest, llm, nippou, pipeline, store
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_G9_LATEST_PATH = _REPO_ROOT / "config" / "g9_latest.json"
 _FAX_OUTPUT_DIR = _REPO_ROOT / "data" / "fax_previews"
 
 app = FastAPI(title="MOEGI 承認UI")
@@ -31,41 +30,6 @@ app = FastAPI(title="MOEGI 承認UI")
 
 def _db_conn():
     return store.connect()
-
-
-def _g9_badge_html() -> str:
-    """design.md G9-b: 再現率の実測値を常時表示する（承認UIのどのページにも出す）。
-
-    数値目標を置かず「開示すること」自体が合格条件（design.md §3 G9-b）。
-    ただし常時表示するものが長文だとかえって読まれなくなるため、数値2つを
-    チップで見せ、注記は補足として1行に圧縮する（ユーザー指摘: くどい・殺風景）。
-    """
-    try:
-        data = json.loads(_G9_LATEST_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return '<div class="g9-bar g9-bar--missing">AI検出精度: 実測データが見つかりません</div>'
-
-    if data.get("stale"):
-        # ledger N-11: ③-b突合がクラウド既定になり、この数値を測定した構成
-        # （全工程ローカル）はもう既定ではない。古い数値を「現在の既定」として
-        # 見せるとG9-bの趣旨（実測を偽らず開示する）に反するため、明示的に保留と示す。
-        return f"""
-        <div class="g9-bar g9-bar--missing">
-          <span class="g9-label">AI検出精度: 新既定（クラウド突合）での再測定待ち</span>
-          <span class="g9-note">前回実測（{html.escape(data['measured_at'])}・{html.escape(data['mode'])}構成）は既定変更（N-11）により無効。measured_atが更新されるまで数値は表示しません</span>
-        </div>
-        """
-
-    recall_pct = f"{data['recall'] * 100:.1f}%"
-    fpr_pct = f"{data['false_positive_rate'] * 100:.1f}%"
-    return f"""
-    <div class="g9-bar">
-      <span class="g9-label">AI検出精度（実測・{html.escape(data['mode'])}）</span>
-      <span class="g9-stat">再現率 <strong>{recall_pct}</strong></span>
-      <span class="g9-stat">誤検出率 <strong>{fpr_pct}</strong></span>
-      <span class="g9-note">{html.escape(data['measured_at'])}計測・だから承認は必ず人が行います</span>
-    </div>
-    """
 
 
 _PAGE_STYLE = """
@@ -108,16 +72,6 @@ _PAGE_STYLE = """
   h1 { font-size: 1.5rem; letter-spacing: 0.01em; margin: 1.75rem 0 0.75rem; text-wrap: balance; }
   h2 { font-size: 1.05rem; color: var(--ink-soft); font-weight: 600; margin: 2rem 0 0.75rem; }
   a { color: var(--moegi-deep); }
-
-  .g9-bar {
-    display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 1rem;
-    background: var(--moegi-soft); border-bottom: 3px solid var(--moegi);
-    padding: 0.6rem 1rem; font-size: 0.85rem; margin: 0 -1.25rem 1rem;
-  }
-  .g9-bar--missing { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
-  .g9-label { font-weight: 600; color: var(--moegi-deep); }
-  .g9-stat strong { font-variant-numeric: tabular-nums; font-size: 1rem; }
-  .g9-note { color: var(--ink-soft); margin-left: auto; }
 
   .run-warning {
     background: var(--warn-soft); border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0;
@@ -177,7 +131,6 @@ _PAGE_STYLE = """
 
   @media (max-width: 600px) {
     .diff { grid-template-columns: 1fr; }
-    .g9-bar { margin: 0 -1.25rem 1rem; }
   }
 </style>
 """
@@ -188,7 +141,7 @@ def _render_page(body: str) -> HTMLResponse:
         f"<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
         f"<title>MOEGI 承認UI</title>{_PAGE_STYLE}</head>"
-        f"<body>{_g9_badge_html()}{body}</body></html>"
+        f"<body>{body}</body></html>"
     )
 
 
@@ -356,6 +309,7 @@ def review_run(run_id: str) -> HTMLResponse:
     conn = _db_conn()
     try:
         rows = store.list_proposals_for_review(conn, run_id)
+        deliveries = store.list_fax_deliveries(conn, run_id)
     finally:
         conn.close()
 
@@ -363,12 +317,24 @@ def review_run(run_id: str) -> HTMLResponse:
         return _render_page(f"<h1>run_id={html.escape(run_id)}</h1><p>更新案がありません。</p>")
 
     approved_count = sum(1 for r in rows if r["status"] == "承認")
+    history_html = (
+        "<p class='meta'>配信履歴はまだありません。</p>"
+        if not deliveries
+        else "<ul class='run-list'>"
+        + "".join(
+            f"<li>{html.escape(d['generated_at'])} — 更新案 {len(d['proposal_row_ids'])} 件</li>"
+            for d in deliveries
+        )
+        + "</ul>"
+    )
     fax_section = f"""
     <h2>配布（即時チャネル）</h2>
     <p class="meta">承認済み {approved_count} 件を反映したFAX様式PDFのプレビューを生成します（design.md §5.3）。</p>
     <form method="get" action="/runs/{html.escape(run_id)}/fax-preview">
       <button type="submit">FAXプレビューPDFを生成</button>
     </form>
+    <h2>配信履歴</h2>
+    {history_html}
     """
 
     body = f"<h1>更新案の承認（run_id={html.escape(run_id)}）</h1>"
@@ -379,16 +345,27 @@ def review_run(run_id: str) -> HTMLResponse:
 
 @app.get("/runs/{run_id}/fax-preview")
 def fax_preview(run_id: str) -> FileResponse:
-    """design.md §5.3 即時チャネル。承認済み更新案からFAX様式PDFを生成し画面プレビューする。"""
+    """design.md §5.3 即時チャネル。承認済み更新案からFAX様式PDFを生成し画面プレビューする。
+
+    生成のたびに fax_deliveries へ配信履歴（監査ログ）を1件残す（ユーザー決定・2026-08-11、
+    ledger R-76）。PDF自体は毎回再生成する既存仕様のままなので、「いつ・どのproposalを
+    含んだPDFを作ったか」はこの履歴だけが記録している。
+    """
     conn = _db_conn()
     try:
         rows = store.list_proposals_for_review(conn, run_id)
+        approved = [r for r in rows if r["status"] == "承認"]
+        out_path = _FAX_OUTPUT_DIR / f"{run_id}.pdf"
+        fax.generate_fax_pdf("◯◯訪問看護ステーション", approved, out_path)
+        store.save_fax_delivery(
+            conn,
+            run_id=run_id,
+            proposal_row_ids=[r["row_id"] for r in approved],
+            file_path=str(out_path),
+        )
     finally:
         conn.close()
 
-    approved = [r for r in rows if r["status"] == "承認"]
-    out_path = _FAX_OUTPUT_DIR / f"{run_id}.pdf"
-    fax.generate_fax_pdf("◯◯訪問看護ステーション", approved, out_path)
     return FileResponse(out_path, media_type="application/pdf", filename=f"fax_preview_{run_id}.pdf")
 
 
