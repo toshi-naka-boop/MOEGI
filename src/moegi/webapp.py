@@ -23,7 +23,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from moegi import fax, ingest, llm, monthly, nippou, pipeline, privacy, store
+from moegi import checklist, fax, ingest, llm, monthly, nippou, pipeline, privacy, store
 from moegi.privacy import dictionary as privacy_dictionary
 from moegi.privacy import vault as privacy_vault
 
@@ -980,6 +980,153 @@ def nippou_recheck(
     finally:
         adapter.close()
     return _structure_and_render(gate_result, context)
+
+
+_SAMPLE_UTTERANCE = (
+    "訪問終了しました。血圧128の78、体温36.5度、脈拍70、呼吸数16。"
+    "褥瘡の処置を実施しました。ご本人は痛みが和らいだとおっしゃっています。"
+    "目標にしていた在宅療養の継続については、ご家族の協力もあって順調に経過しています。"
+)
+
+
+def _checklist_items_html(items: list[pipeline.ChecklistItem], highlight: set[str]) -> str:
+    return "<ol>" + "".join(
+        (
+            f"<li><mark>{html.escape(i.label)}</mark>"
+            if i.label in highlight
+            else f"<li>{html.escape(i.label)}"
+        )
+        + (f" <span class='meta'>（看護目標: {html.escape(i.goal_ref)}）</span>" if i.goal_ref else "")
+        + "</li>"
+        for i in items
+    ) + "</ol>"
+
+
+def _before_after_form_html(run_id: str, utterance: str = "", goal_ref: str = "") -> str:
+    return f"""
+    <h2>同じ発話を、変更前／変更後のチェックリストで処理する</h2>
+    <p class="meta">同一の発話データを2回構造化し、チェックリストの変更が記録の中身に
+      どう現れるかを並べます（design.md G6）。発話は Privacy Gate を通してから構造化します。</p>
+    <form class="edit-form" method="post" action="/runs/{html.escape(run_id)}/before-after"
+          onsubmit="this.querySelector('button').disabled = true;
+                    this.querySelector('button').textContent = '処理中…';">
+      <label class="field-label" for="ba-utterance">発話内容</label>
+      <textarea id="ba-utterance" name="utterance_text" rows="4">{html.escape(utterance or _SAMPLE_UTTERANCE)}</textarea>
+      <label class="field-label" for="ba-goal">看護目標（新規の「評価」項目に紐づけます）</label>
+      <textarea id="ba-goal" name="goal_ref" rows="2">{html.escape(goal_ref or "在宅療養の継続")}</textarea>
+      <button type="submit">Before / After を比較する</button>
+    </form>
+    """
+
+
+def _load_checklist_diff(run_id: str, goal_ref: str) -> checklist.ChecklistDiff:
+    conn = _db_conn()
+    try:
+        rows = store.list_proposals_for_review(conn, run_id)
+    finally:
+        conn.close()
+    return checklist.apply_approved(pipeline.load_sitedoc(), rows, goal_ref=goal_ref)
+
+
+def _checklist_diff_html(diff: checklist.ChecklistDiff) -> str:
+    added = set(diff.added)
+    changed_after = {after for _, after in diff.changed}
+    notes = []
+    if not diff.has_changes:
+        notes.append(
+            "このrunにはまだ承認済みの更新案がありません。先に更新案を承認してください。"
+        )
+    if diff.unmatched:
+        notes.append(
+            f"承認済みだが現在のチェックリストに該当項目が見つからなかった更新案が "
+            f"{len(diff.unmatched)} 件あります（項目ラベルが既に書き換わっている可能性。"
+            "項目の不変ID設計が未着手のため、ここは取りこぼしとして表示しています）。"
+        )
+    notes_html = (
+        "<div class='run-warning'><ul>" + "".join(f"<li>{html.escape(n)}</li>" for n in notes) + "</ul></div>"
+        if notes
+        else ""
+    )
+    return f"""
+    {notes_html}
+    <div class="diff">
+      <div><span class="field-label">変更前のチェックリスト</span>
+        {_checklist_items_html(diff.before.items, set())}</div>
+      <div><span class="field-label">変更後のチェックリスト</span>
+        {_checklist_items_html(diff.after.items, added | changed_after)}</div>
+    </div>
+    """
+
+
+@app.get("/runs/{run_id}/before-after", response_class=HTMLResponse)
+def before_after_form(run_id: str) -> HTMLResponse:
+    """G6 Before/After 比較画面の入力フォーム。"""
+    diff = _load_checklist_diff(run_id, "在宅療養の継続")
+    body = (
+        f"<h1>Before / After 比較（run_id={html.escape(run_id[:8])}）</h1>"
+        f"<p class='home-nav'><a href='/runs/{html.escape(run_id)}'>← このrunの承認画面へ戻る</a></p>"
+        + _checklist_diff_html(diff)
+        + _before_after_form_html(run_id)
+    )
+    return _render_page(body)
+
+
+@app.post("/runs/{run_id}/before-after", response_class=HTMLResponse)
+def before_after_compare(
+    run_id: str, utterance_text: str = Form(""), goal_ref: str = Form("")
+) -> HTMLResponse:
+    """同一の発話を、変更前／変更後のチェックリストでそれぞれ構造化して並べる（G6）。
+
+    ここでも Privacy Gate は迂回しない。仮名化に通らない発話は構造化を1回も行わない。
+    """
+    diff = _load_checklist_diff(run_id, goal_ref.strip())
+
+    adapter = llm.LLMAdapter()
+    try:
+        gate_result = _run_privacy_gate(utterance_text, adapter=adapter)
+    finally:
+        adapter.close()
+
+    header = (
+        f"<h1>Before / After 比較（run_id={html.escape(run_id[:8])}）</h1>"
+        f"<p class='home-nav'><a href='/runs/{html.escape(run_id)}'>← このrunの承認画面へ戻る</a></p>"
+    )
+
+    if not privacy.cleared_for_downstream(gate_result):
+        body = (
+            header
+            + _gate_summary_html(gate_result)
+            + "<p class='run-warning'>セキュリティ検査に通らなかったため、構造化は行っていません。</p>"
+            + _checklist_diff_html(diff)
+        )
+        return _render_page(body)
+
+    adapter = llm.LLMAdapter()
+    try:
+        agent = nippou.NippouAgent(adapter)
+        agent.set_checklist(diff.before.items)
+        before_record = agent.structure(gate_result.sanitized_text, utterance_id="before")
+        agent.set_checklist(diff.after.items)
+        after_record = agent.structure(gate_result.sanitized_text, utterance_id="after")
+    finally:
+        adapter.close()
+
+    _save_privacy_audit(gate_result, proceeded=True)
+
+    body = (
+        header
+        + _gate_summary_html(gate_result)
+        + "<h2>発話内容（仮名化済み・両方に同じものを入力）</h2>"
+        + f"<p class='trace-text'>{html.escape(gate_result.sanitized_text)}</p>"
+        + _checklist_diff_html(diff)
+        + "<h2>構造化結果の比較</h2>"
+        + "<div class='diff'>"
+        + f"<div><span class='field-label'>変更前</span>{_nippou_record_html(before_record)}</div>"
+        + f"<div><span class='field-label'>変更後</span>{_nippou_record_html(after_record)}</div>"
+        + "</div>"
+        + _before_after_form_html(run_id, utterance_text, goal_ref)
+    )
+    return _render_page(body)
 
 
 def _monthly_form_html(subject_code: str = "", month: str = "") -> str:
