@@ -531,6 +531,25 @@ def nippou_form() -> HTMLResponse:
         return;
       }}
 
+      // iOS Safari 18.3以前はaudio/webmを録音できず、audio/mp4（AAC）にしか対応しない
+      // （18.4以降はwebmも対応）。isTypeSupportedで実機ごとに使える形式を選ぶ。
+      // 参照: https://webkit.org/blog/11353/mediarecorder-api/
+      function pickMimeType() {{
+        var candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'];
+        for (var i = 0; i < candidates.length; i++) {{
+          if (MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
+        }}
+        return '';  // どれも明示サポートが無ければブラウザ既定に任せる
+      }}
+
+      // 実際に使われたmimeTypeから拡張子を決める。nippou.pyの_AUDIO_SUFFIXESに
+      // .m4a・.webmは既にあるため、mp4系はm4aへ寄せる（webm以外は.m4aで統一）。
+      function extensionFor(mimeType) {{
+        if (mimeType.indexOf('webm') !== -1) return 'webm';
+        if (mimeType.indexOf('ogg') !== -1) return 'ogg';
+        return 'm4a';
+      }}
+
       recordBtn.addEventListener('click', function() {{
         if (mediaRecorder && mediaRecorder.state === 'recording') {{
           mediaRecorder.stop();
@@ -538,11 +557,14 @@ def nippou_form() -> HTMLResponse:
         }}
         navigator.mediaDevices.getUserMedia({{audio: true}}).then(function(stream) {{
           chunks = [];
-          mediaRecorder = new MediaRecorder(stream);
+          var mimeType = pickMimeType();
+          mediaRecorder = mimeType ? new MediaRecorder(stream, {{mimeType: mimeType}}) : new MediaRecorder(stream);
           mediaRecorder.ondataavailable = function(e) {{ chunks.push(e.data); }};
           mediaRecorder.onstop = function() {{
-            var blob = new Blob(chunks, {{type: 'audio/webm'}});
-            var file = new File([blob], 'nippou.webm', {{type: 'audio/webm'}});
+            var actualType = mediaRecorder.mimeType || mimeType || 'audio/webm';
+            var ext = extensionFor(actualType);
+            var blob = new Blob(chunks, {{type: actualType}});
+            var file = new File([blob], 'nippou.' + ext, {{type: actualType}});
             var dt = new DataTransfer();
             dt.items.add(file);
             audioInput.files = dt.files;

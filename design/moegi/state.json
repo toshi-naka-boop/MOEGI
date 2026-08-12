@@ -27,10 +27,12 @@
     "script-rework": "§7台本#6を実ワークフロー（現場録音→事務所バッチ処理）に合わせて作り直す。design.md §7に2026-08-12深夜のドラフト案あり（要レビュー・🔧マーク）",
     "line-queue": "LINEキュー型チャネル（store-and-forward・送信待ちバッジ・復帰時自動フラッシュ）は未実装。外部サービス連携のため実装前にユーザー承認が必要",
     "g6-ui": "Before/After比較画面・発話カードのUI（design.md D6行）は未実装",
-    "mobile-nippou-real-device-check": "R-80の録音UIは実機スマホ・タブレットのマイク許可フロー・タッチ操作で未確認（ヘッドレスブラウザでは検証不可）",
-    "n8-remaining-3-cells": "eval-loopで45/48(93.8%)まで改善後に残る3セル（e/訪問日数頻度・g_a/時間の記録＝誤検出2件、g_i/訪問日数頻度＝見逃し1件）。原因は③-a要件抽出（requirement_text）の要約が「計画」と「記録」の区別・合算ルールの含意を落としている可能性。根本対応には③-aプロンプトの改善が必要かもしれない"
+    "mobile-nippou-real-device-check": "R-80/R-81の録音UIは実機スマホ・タブレットのマイク許可フロー・タッチ操作で未確認（ヘッドレスブラウザ・Simulator両方とも検証不可だった）",
+    "n8-remaining-3-cells": "eval-loopで45/48(93.8%)まで改善後に残る3セル（e/訪問日数頻度・g_a/時間の記録＝誤検出2件、g_i/訪問日数頻度＝見逃し1件）。原因は③-a要件抽出（requirement_text）の要約が「計画」と「記録」の区別・合算ルールの含意を落としている可能性。根本対応には③-aプロンプトの改善が必要かもしれない",
+    "mobile-nippou-https-requirement": "R-81: 実機スマホから会場Wi-Fi経由で/nippouへアクセスする場合、getUserMedia（マイク）はセキュアコンテキスト（HTTPS）を要求する。現状は平文HTTPのuvicornのみで、このままではデモ会場で録音ボタンが動かない可能性が高い。デモ当日までにHTTPS化（自己署名証明書＋端末への信頼登録、またはngrok等のトンネリングサービス）の方針を決める必要がある"
   },
   "blockedOn": {
+    "xcode-full-install": "R-81のiOS動作確認にはiOS Simulatorが必要だが、このMacはXcodeコマンドラインツールのみでフルインストールされていない。Mac App StoreからXcodeを入れ、`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`（ユーザーのパスワードが必要なため代行不可）を実行後に再確認できる",
     "N-4": "厚労省「説明資料」PDFがリポジトリに存在しないため原文確認が今夜は不可能だった。ユーザーが原本を持っているか確認が必要",
     "checklist-item-identity": "2026-08-12深夜の批評round-4で判明: ChecklistItemの識別子は項目ラベル文字列そのもの（可変な自然キー）。『承認済みチェックリストを日報エージェントへ反映する』(c)機能を作るには、項目に不変IDを持たせる設計変更が必要（sitedoc_sample.toml・goldset.toml・store.pyのimpacts.sitedoc_item_idを含む複数ファイルに波及）。実装するかどうか・するとしたらどの範囲まで変更を許容するかはユーザー判断が必要（詳細: reviews/round-4-opus.md, ledger N-8「2026-08-12深夜」の項）"
   },
