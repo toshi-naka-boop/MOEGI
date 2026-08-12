@@ -1,9 +1,10 @@
 {
-  "mode": "single-cloud",
-  "recall": 0.833,
-  "false_positive_rate": 0.095,
+  "mode": "single-cloud+orchestrate",
+  "recall": 0.667,
+  "false_positive_rate": 0.024,
+  "eval_loop_accuracy": 0.938,
   "measured_at": "2026-08-12",
   "goldset": "config/goldset.toml",
   "stale": false,
-  "note": "N-8対策（design.md §6.7(a)・ledger 2026-08-12深夜）後の実測。単発モードの突合プロンプトに兄弟項目のラベルを追加し、独立判定による重複した「要更新」誤判定を抑制した。誤検出率35.7%→9.5%に改善。再現率は83.3%を維持（プロンプト調整の初回試行では66.7%→33.3%まで悪化する副作用が出たため、指示文言を弱めて再測定・採用）。48セルという小標本のため数ポイント単位の run-to-run 変動はある。次の改善案（複数項目の判定結果を横断的に裁定するオーケストレーションLLM）はD6以降の判断タスクとして持ち越し"
+  "note": "N-8対策の最終形（design.md §6.7・ledger 2026-08-12深夜〜早朝）。クロスベンダー批評（design-critic opus + codex）でプロンプト文面の欠陥を指摘され改訂し、ユーザー新規作成の/eval-loopスキルで3巡の定量評価（48セル）を実施: 72.9%→89.6%→93.8%まで改善（正答率＝要更新/影響なし判定の完全一致率。recall/false_positive_rateとは別軸の指標）。orchestrate=Trueをwebapp.py/cli.pyの本番既定に採用。この行のrecall/false_positive_rateは単発の再測定値（正解「要更新」6件のみのため1セル差で16.7ポイント動く高ノイズ指標——48セル全体の正答率93.8%の方が代表値として安定）。残り既知の限界3セル（誤検出2・見逃し1）はゴールドセット検証済みでモデル側の限界と判断・D6以降の検討事項"
 }

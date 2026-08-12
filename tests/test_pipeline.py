@@ -252,8 +252,9 @@ class MatchRequirementsSiblingVisibilityTest(unittest.TestCase):
 
     def test_prompt_does_not_force_deferring_to_other_items(self):
         # R-79深夜の実測（G9-b before/after）: 「機械的に影響なしに倒せ」という強い指示は
-        # 誤検出率を大幅改善する一方で再現率も66.7%→33.3%まで悪化させた。指示を弱め、
-        # 「他の項目がカバーしていても機械的に影響なしにする必要はない」という文言に修正した。
+        # 誤検出率を大幅改善する一方で再現率も66.7%→33.3%まで悪化させた。指示を弱めた後、
+        # クロスベンダー批評（design-critic opus + codex）を経て「他の項目の方が適切に
+        # 見えるという理由だけで影響なしにしない」という文言・単一の判定基準に再改訂した。
         adapter = _FakeAdapter(
             {
                 "matching": [
@@ -267,7 +268,9 @@ class MatchRequirementsSiblingVisibilityTest(unittest.TestCase):
         pipeline.match_requirements(
             [self.requirement], {"d": self.change}, self.sitedoc, adapter, run_id="r"
         )
-        self.assertIn("機械的に「影響なし」に", adapter.calls[0][1])
+        prompt = adapter.calls[0][1]
+        self.assertIn("適合しなくなる", prompt)
+        self.assertIn("他の項目の方が適切に見える", prompt)
 
 
 class MatchRequirementsOrchestrateTest(unittest.TestCase):
@@ -355,6 +358,52 @@ class MatchRequirementsOrchestrateTest(unittest.TestCase):
         )
         self.assertEqual(len(adapter.calls), 2)
         self.assertEqual({i.sitedoc_item_id for i in impacts}, {"項目A", "項目B"})
+
+
+class MatchRequirementsFreeformNoteTest(unittest.TestCase):
+    """eval-loop round2・ledger N-8: 「具体的な文言が無いこと自体は理由にならない」という
+    抑制原則が、required値に関わらず全項目へ一律に適用されることの検証。
+
+    round1では required=false を代理指標に条件分岐していたが、「1回の訪問時間が標準を
+    下回る場合の理由記録」（required=false だがトピックが明確）を誤って抑制する回帰を
+    起こしたため、round2で普遍原則に一本化した（required分岐は撤廃）。
+    """
+
+    def setUp(self):
+        self.sitedoc = pipeline.SiteDoc(
+            id="s",
+            kind="チェックリスト",
+            title="t",
+            items=[
+                pipeline.ChecklistItem(sitedoc_id="s", label="バイタルサインの記録", kind="自由記述", required=True),
+                pipeline.ChecklistItem(sitedoc_id="s", label="特記事項", kind="自由記述", required=False),
+            ],
+        )
+        self.change = pipeline.Change(
+            id="d", old_section=None,
+            new_section=_section("第1", "文S1。"), kind="改正", summary="テスト用の変更",
+        )
+        self.requirement = pipeline.Requirement(change_id="d", text="要求事項")
+
+    def test_no_specific_wording_principle_applies_regardless_of_required(self):
+        adapter = _FakeAdapter(
+            {
+                "matching": [
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"verdict": "影響なし", "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                    json.dumps({"needed": False, "rationale": "x", "confidence": 0.1, "evidence_segment_id": ""}),
+                ]
+            }
+        )
+        pipeline.match_requirements(
+            [self.requirement], {"d": self.change}, self.sitedoc, adapter, run_id="r"
+        )
+        required_item_prompt = adapter.calls[0][1]  # バイタルサインの記録（required=True）
+        optional_item_prompt = adapter.calls[1][1]  # 特記事項（required=False）
+        # required値に関わらず、同じ普遍原則の文言が両方に出ること（条件分岐が無いこと）
+        for prompt in (required_item_prompt, optional_item_prompt):
+            self.assertIn("具体的な文言が定義されていない", prompt)
+            self.assertIn("直接該当すると言える", prompt)
 
 
 class MatchRequirementsPrecedentsTest(unittest.TestCase):

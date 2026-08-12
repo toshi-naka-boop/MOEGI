@@ -280,6 +280,10 @@ def create_run(label: str = Form(...)) -> RedirectResponse:
                 run_id=run_id,
                 store_conn=conn,
                 labels={label},
+                # eval-loop（2026-08-12深夜・N-8対策）で45/48=93.8%まで実測検証した設定。
+                # orchestrate単独では効果が実測ノイズと区別できなかったが、プロンプト改訂
+                # （根拠文つき・普遍原則化）後は一貫して寄与しているため本番既定にする。
+                orchestrate=True,
             )
         store.save_pipeline_result(conn, run_id, result)
     finally:

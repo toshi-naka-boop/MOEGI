@@ -1,0 +1,48 @@
+{"id": "d__訪問開始・終了時刻の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 53.287}
+{"id": "d__指定訪問看護の実施に要した時間の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "d__訪問日数・訪問頻度の記録", "passed": true, "output": {"verdict": "要更新"}, "failures": [], "elapsed": 0.0}
+{"id": "d__1回の訪問時間が標準（30分〜1時間30分）を下回る場合の理由記録", "passed": true, "output": {"verdict": "要更新"}, "failures": [], "elapsed": 0.0}
+{"id": "d__短時間訪問（20分以上30分未満）の実施記録", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "d__利用者の看護目標", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "d__バイタルサインの記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "d__特記事項", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "e__訪問開始・終了時刻の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 56.221}
+{"id": "e__指定訪問看護の実施に要した時間の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "e__訪問日数・訪問頻度の記録", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "e__1回の訪問時間が標準（30分〜1時間30分）を下回る場合の理由記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "e__短時間訪問（20分以上30分未満）の実施記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "e__利用者の看護目標", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "e__バイタルサインの記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "e__特記事項", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "c__訪問開始・終了時刻の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 44.209}
+{"id": "c__指定訪問看護の実施に要した時間の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "c__訪問日数・訪問頻度の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "c__1回の訪問時間が標準（30分〜1時間30分）を下回る場合の理由記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "c__短時間訪問（20分以上30分未満）の実施記録", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "c__利用者の看護目標", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "c__バイタルサインの記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "c__特記事項", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "ab__訪問開始・終了時刻の記録", "passed": true, "output": {"verdict": "要更新"}, "failures": [], "elapsed": 42.778}
+{"id": "ab__指定訪問看護の実施に要した時間の記録", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "ab__訪問日数・訪問頻度の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "ab__1回の訪問時間が標準（30分〜1時間30分）を下回る場合の理由記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "ab__短時間訪問（20分以上30分未満）の実施記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "ab__利用者の看護目標", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "ab__バイタルサインの記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "ab__特記事項", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "g_a__訪問開始・終了時刻の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 40.006}
+{"id": "g_a__指定訪問看護の実施に要した時間の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "g_a__訪問日数・訪問頻度の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "g_a__1回の訪問時間が標準（30分〜1時間30分）を下回る場合の理由記録", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "g_a__短時間訪問（20分以上30分未満）の実施記録", "passed": false, "output": {"verdict": "影響なし"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='要更新' actual='影響なし'"}], "elapsed": 0.0}
+{"id": "g_a__利用者の看護目標", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "g_a__バイタルサインの記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "g_a__特記事項", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "g_i__訪問開始・終了時刻の記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 94.223}
+{"id": "g_i__指定訪問看護の実施に要した時間の記録", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "g_i__訪問日数・訪問頻度の記録", "passed": true, "output": {"verdict": "要更新"}, "failures": [], "elapsed": 0.0}
+{"id": "g_i__1回の訪問時間が標準（30分〜1時間30分）を下回る場合の理由記録", "passed": false, "output": {"verdict": "要更新"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='影響なし' actual='要更新'"}], "elapsed": 0.0}
+{"id": "g_i__短時間訪問（20分以上30分未満）の実施記録", "passed": false, "output": {"verdict": "影響なし"}, "failures": [{"check": "exact_match", "category": "解釈違い", "detail": "verdict: expected='要更新' actual='影響なし'"}], "elapsed": 0.0}
+{"id": "g_i__利用者の看護目標", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "g_i__バイタルサインの記録", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}
+{"id": "g_i__特記事項", "passed": true, "output": {"verdict": "影響なし"}, "failures": [], "elapsed": 0.0}

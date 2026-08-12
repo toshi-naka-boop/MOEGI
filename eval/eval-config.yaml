@@ -1,0 +1,19 @@
+# eval-loop 設定（N-8対策: ③-b突合プロンプトの精度評価）
+# 対象: src/moegi/pipeline.py の _MATCH_ITEM_PROMPT + _ORCHESTRATE_PROMPT
+version: 1
+
+target:
+  entrypoint: "eval.entrypoint:judge_cell"
+
+dataset:
+  path: "eval/datasets/g9_matching.jsonl"
+
+checks:
+  - type: exact_match
+    fields: ["verdict"]
+
+run:
+  # LLMAdapterはlabelごとに1回だけ呼ぶ（entrypoint.py内でキャッシュ済み）。
+  # 並列にするとキャッシュミスが重なり同じlabelを二重に呼ぶ恐れがあるため直列にする。
+  concurrency: 1
+  output_dir: "eval/runs"
