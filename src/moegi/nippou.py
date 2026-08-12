@@ -8,6 +8,13 @@
           ローカルASR（オフライン必須・§5）。テキスト入力でも同じ経路に入る（G7）
       structure(text: str) -> NippouRecord
           set_checklist で受け取った項目に照合した構造化記録を返す
+      structure_soap(text: str) -> SoapRecord
+          同じ発話をSOAP形式（S/O/A/P）へ構造化して返す
+
+⚠️ structure() / structure_soap() に渡してよいのは、Privacy Gate を通過した
+   **仮名化済みテキスト**だけ（design/moegi/privacy.md §4）。原文をそのまま渡す経路は
+   webapp.py 側に作っていない。このモジュール自体は仮名化の有無を検査しない——
+   検査は privacy.gate に集約し、既存の構造化ロジックには手を入れない方針のため。
 
 design.md §6.6・N-11: structure() は要配慮個人情報（患者の看護記録）を扱う唯一の工程で、
 常にローカル（gemma4:26b・stage="nippou"）。transcribe() の音声入力もオフライン必須（R-13）。
@@ -72,6 +79,27 @@ class NippouRecord:
     procedures: list[str] = field(default_factory=list)
 
 
+@dataclass
+class SoapRecord:
+    """SOAP形式の看護記録。
+
+    訪問看護記録IIで一般的な4区分。日報（チェックリスト項目への充足判定）とは
+    出力形式が違うだけで、入力も実行主体も同じ——**どちらも Privacy Gate を
+    通過した仮名化済みテキストだけを受け取る**（design/moegi/privacy.md §4）。
+
+    undecidable は、ローカルLLMのtimeout・応答形式不正で構造化できなかった場合に立つ。
+    design.md §6.6 の完走優先方針に合わせ、例外を上げず「判定不能」として返す。
+    """
+
+    utterance_id: str
+    subjective: str = ""
+    objective: str = ""
+    assessment: str = ""
+    plan: str = ""
+    procedures: list[str] = field(default_factory=list)
+    undecidable: bool = False
+
+
 _STRUCTURE_PROMPT = """あなたは訪問看護の記録担当者です。以下の発話内容を、事業所チェックリストの
 各項目に照合して構造化してください。
 
@@ -102,6 +130,33 @@ _EVALUATION_INSTRUCTION = (
     "入れること。発話内容に評価に relate する言及が無ければ achievement・effect は空文字にすること。"
 )
 _EVALUATION_EXAMPLE = ', "evaluation": {"achievement": "順調に経過", "effect": "疼痛が軽減"}'
+
+
+_SOAP_PROMPT = """あなたは訪問看護の記録担当者です。以下の発話内容を、看護記録のSOAP形式へ
+構造化してください。
+
+【発話内容】
+{text}
+
+【各区分の意味】
+- subjective（S・主観的情報）: 利用者・家族が話した内容、訴え、自覚症状
+- objective（O・客観的情報）: 観察・測定した事実。バイタルサイン、皮膚・創部の状態、ADLの様子
+- assessment（A・アセスメント）: SとOから導いた看護上の判断・評価
+- plan（P・計画）: 次回訪問までの対応、継続observation、指導内容
+
+【必ず守ること】
+- 発話内容に無いことを書かないこと。該当する情報が無い区分は空文字にすること
+- PATIENT_001・NURSE_001・長女 のような仮名、[[PHONE]]・[[ADDRESS]] のようなタグは
+  **そのまま書き写す**こと。実名や具体的な値に戻そうとしないこと
+- 病名・症状・服薬・処置・バイタルの数値は落とさずに記載すること
+
+【出力形式】
+次のJSONオブジェクトのみを出力すること。前置き・説明文・コードブロック記号は付けないこと。
+subjective・objective・assessment・plan の4つのキーを必ず持ち、値はいずれも文字列。
+
+出力例:
+{{"subjective": "腰の痛みが昨日より楽になったとの訴えあり。", "objective": "血圧128/78、体温36.5度、脈拍70。創部の発赤なし。", "assessment": "疼痛はコントロールできており、創部感染兆候なし。", "plan": "次回訪問時も疼痛スケールを確認し、体位交換の指導を継続する。"}}
+"""
 
 
 def _format_checklist_block(items: list[ChecklistItem]) -> str:
@@ -251,6 +306,43 @@ class NippouAgent:
             utterance_id=utterance_id,
             items=items,
             evaluation=evaluation,
+            procedures=procedures,
+        )
+
+    def structure_soap(
+        self, text: str, *, utterance_id: str = "utt", procedures: list[str] | None = None
+    ) -> SoapRecord:
+        """発話内容をSOAP形式（S/O/A/P）へ構造化する。
+
+        日報の structure() と同じ規律で作ってある:
+          - stage は "nippou"（要配慮個人情報を扱うためローカル固定・llm.py が強制）
+          - 自由文の一括生成ではなくキー固定のJSONを返させる（非決定性対策・批評C-5）
+          - 処置内容はLLMを経由せず、呼び出し側のボタン選択をそのまま格納（ledger R-77）
+          - timeout・形式不正では例外を上げず undecidable=True で返す（design.md §6.6）
+
+        入力は Privacy Gate を通過した仮名化済みテキストであることを前提にしている。
+        仮名（PATIENT_001 等）とタグ（[[PHONE]] 等）はそのまま残すようプロンプトで
+        指示する——ここで元に戻そうとされると仮名化の意味が消える。
+        """
+        procedures = procedures or []
+        result = self._adapter.complete("nippou", _SOAP_PROMPT.format(text=text))
+
+        if result.get("timeout"):
+            return SoapRecord(utterance_id=utterance_id, procedures=procedures, undecidable=True)
+
+        payload = _extract_json_payload(result["text"])
+        if not payload:
+            return SoapRecord(utterance_id=utterance_id, procedures=procedures, undecidable=True)
+
+        def _field(key: str) -> str:
+            return str(payload.get(key) or "").strip()
+
+        return SoapRecord(
+            utterance_id=utterance_id,
+            subjective=_field("subjective"),
+            objective=_field("objective"),
+            assessment=_field("assessment"),
+            plan=_field("plan"),
             procedures=procedures,
         )
 
