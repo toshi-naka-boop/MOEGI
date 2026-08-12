@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import unicodedata
 import uuid
@@ -128,6 +129,40 @@ def _is_mojibake(text: str) -> bool:
 
 def _worst(*statuses: PrivacyGateStatus) -> PrivacyGateStatus:
     return max(statuses, key=lambda s: _SEVERITY[s])
+
+
+#: 仮名・タグに含まれる数字（PATIENT_001 の 001、[[...]] の中身）は臨床情報ではないので、
+#: 数値の保存チェックの対象から外すために先に取り除く。
+_PSEUDONYM_TOKEN_RE = re.compile(r"\[\[[A-Z_0-9]{1,32}\]\]|[A-Z]{3,12}_[A-Za-z0-9]{1,16}")
+_NUMBER_RE = re.compile(r"[0-9]{1,4}(?:\.[0-9]{1,2})?")
+
+
+def _clinical_numbers(text: str) -> list[str]:
+    """臨床情報の中核である数値（バイタル・用量・回数）を取り出す。
+
+    仮名（PATIENT_001）とタグ（[[PHONE]]）を先に落としてから数える——それらの数字は
+    臨床情報ではないので、消えても増えても構わない。
+    """
+    stripped = _PSEUDONYM_TOKEN_RE.sub(" ", text)
+    return _NUMBER_RE.findall(stripped)
+
+
+def _dropped_clinical_numbers(before: str, after: str) -> list[str]:
+    """仮名化の前後で消えた数値を返す（design/moegi/privacy.md §5.3 の停止条件）。
+
+    実測（2026-08-12・ledger R-86）でローカル7Bモデルが「出力例の文をそのまま
+    書き写す」＝本文まるごと差し替えを起こしたため追加した。文字数の比（max_removal_ratio）
+    だけでは、長さが近い別の文に化けたケースを取り逃す。バイタルの数値が消えたかどうかは
+    決定論的に判定でき、臨床上の欠落に直結する。
+    """
+    remaining = list(_clinical_numbers(after))
+    dropped: list[str] = []
+    for number in _clinical_numbers(before):
+        if number in remaining:
+            remaining.remove(number)
+        else:
+            dropped.append(number)
+    return dropped
 
 
 def _count_by_type(detections: list[rules.Detection]) -> dict[str, int]:
@@ -255,6 +290,14 @@ def run_gate(
     removal_ratio = max(0.0, (len(deterministic_text) - len(sanitized_text)) / len(deterministic_text))
     if removal_ratio > config.max_removal_ratio:
         reason_codes.append("excessive_removal")
+        status = _worst(status, PrivacyGateStatus.REVIEW_REQUIRED)
+        needs_human_review = True
+
+    # 文字数比だけでは、長さの近い別の文に化けたケース（実測: 出力例の書き写し・ledger R-86）を
+    # 取り逃す。バイタル等の数値が消えていないかを決定論的に確かめる。
+    dropped_numbers = _dropped_clinical_numbers(deterministic_text, sanitized_text)
+    if dropped_numbers:
+        reason_codes.append("clinical_numbers_dropped")
         status = _worst(status, PrivacyGateStatus.REVIEW_REQUIRED)
         needs_human_review = True
 

@@ -348,6 +348,41 @@ class GateFailClosedTest(unittest.TestCase):
         self.assertIn("excessive_removal", result.reason_codes)
         self.assertFalse(privacy.cleared_for_downstream(result))
 
+    def test_llm_replacing_the_body_with_the_prompt_example_is_caught(self):
+        # ledger R-86（実機実測で発見）: ローカル7Bモデルが、プロンプト内の出力例の文を
+        # そのまま sanitized_text として返すことがある。文字数が近いと max_removal_ratio では
+        # 捕まらないので、臨床情報の中核である数値が消えたことで検知する。
+        adapter = _FakeAdapter([_llm_payload("PATIENT_001さんは昨日から発熱があります。長女から連絡がありました。")])
+        result = privacy.run_gate(
+            "血圧128/78、体温36.5度、脈拍70。ロキソニン60mgを内服中。膝の痛みは軽減。",
+            config=_config(llm_detection=True),
+            adapter=adapter,
+            today=_TODAY,
+        )
+        self.assertIn("clinical_numbers_dropped", result.reason_codes)
+        self.assertFalse(privacy.cleared_for_downstream(result))
+
+    def test_pseudonym_numbers_do_not_trigger_the_clinical_number_check(self):
+        # PATIENT_001 の 001 や [[PHONE]] は臨床情報ではないので、増減しても止めない。
+        adapter = _FakeAdapter([_llm_payload("PATIENT_007さんの連絡先は[[PHONE]]。血圧128/78、体温36.5度。")])
+        result = privacy.run_gate(
+            "PATIENT_001さんの連絡先は090-1234-5678。血圧128/78、体温36.5度。",
+            config=_config(llm_detection=True),
+            adapter=adapter,
+            today=_TODAY,
+        )
+        self.assertNotIn("clinical_numbers_dropped", result.reason_codes)
+
+    def test_clinical_numbers_are_preserved_in_the_happy_path(self):
+        adapter = _FakeAdapter([_llm_payload("PATIENT_001さん。血圧128/78、体温36.5度、脈拍70。")])
+        result = privacy.run_gate(
+            "山田太郎さん。血圧128/78、体温36.5度、脈拍70。",
+            config=_config(llm_detection=True),
+            adapter=adapter,
+            today=_TODAY,
+        )
+        self.assertEqual(result.status, privacy.PrivacyGateStatus.PASSED)
+
     def test_high_residual_risk_requires_review(self):
         adapter = _FakeAdapter([_llm_payload("訪問を実施した", residual_risk="high")])
         result = privacy.run_gate(
