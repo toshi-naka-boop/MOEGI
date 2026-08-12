@@ -42,3 +42,6 @@ logs/
 # MOEGI: 通達PDF等のダウンロードデータ（リポジトリに含めない）
 data/
 .env
+
+# MOEGI: mkcertのローカル証明書・秘密鍵（R-82・デモ用HTTPS対応。環境依存かつ秘密鍵を含む）
+certs/
