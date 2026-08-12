@@ -52,15 +52,30 @@ from typing import Any
 
 import httpx
 
-STAGES = ("diff", "requirement", "matching", "draft", "nippou")
+STAGES = ("diff", "requirement", "matching", "draft", "nippou", "pseudonymize")
 
 # design.md §6.1 第一原則（v13・ledger N-11）: ローカル固定が必要なのは要配慮個人情報
 # （患者の医療・看護情報）を扱う工程だけ。SiteDoc/ChecklistItemは項目ラベルのテンプレート
 # 定義であり患者データを含まないため、matching/draftは他のクラウド工程と同じ扱いにする
 # （v12までは事業所文書の有無だけでこの2工程を強制ローカルにしていたが、その制約は廃止）。
-# nippou（日報エージェントのstructure()）は患者の実際の看護記録を扱う唯一の工程なので
+# nippou（日報エージェントのstructure()）は患者の実際の看護記録を扱う工程なので
 # LOCAL_ONLY_STAGESに残す（design.md §6.5・nippou.py）。
-LOCAL_ONLY_STAGES: frozenset[str] = frozenset({"nippou"})
+# pseudonymize（仮名化のローカルLLM補完検出）は**まだ仮名化されていない発話**を
+# 扱うため、nippouより更に強い理由でローカル固定（design/moegi/privacy.md §5.3）。
+LOCAL_ONLY_STAGES: frozenset[str] = frozenset({"nippou", "pseudonymize"})
+
+# models.toml にセクションが無くても既定値で動く工程。既存の設定ファイル・テストを
+# 壊さずに工程を増やすための逃げ道で、既定値は必ずローカル固定側に倒す。
+OPTIONAL_STAGES: frozenset[str] = frozenset({"pseudonymize"})
+_OPTIONAL_STAGE_DEFAULTS: dict[str, dict[str, Any]] = {
+    "pseudonymize": {
+        "backend": "local",
+        "model": "gemma4:26b",
+        "reasoning_effort": "none",
+        "max_output_tokens": 1200,
+        "local_timeout_seconds": 120.0,
+    },
+}
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = _REPO_ROOT / "config" / "models.toml"
@@ -130,6 +145,8 @@ def load_model_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     stages: dict[str, StageConfig] = {}
     for stage in STAGES:
         raw = data.get(stage)
+        if raw is None and stage in OPTIONAL_STAGES:
+            raw = _OPTIONAL_STAGE_DEFAULTS[stage]
         if raw is None:
             raise ConfigError(f"models.toml に [{stage}] セクションがありません")
         cfg = StageConfig(

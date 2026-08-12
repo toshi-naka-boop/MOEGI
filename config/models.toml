@@ -113,3 +113,16 @@ max_output_tokens = 900
 # コールド17.8秒／ウォーム3.4秒まで改善している（D5実測・opus批評C-11で決着）。
 # それでも余裕を持たせておく。
 local_timeout_seconds = 180.0
+
+[pseudonymize]
+# 仮名化のローカルLLM補完検出（design/moegi/privacy.md §5.3）。
+# ⚠️ この工程には**まだ仮名化されていない発話**が入る。nippouより更に強い理由で
+#    ローカル固定（backend="local"以外はllm.pyが起動時に拒否する）。
+backend = "local"
+model = "gemma4:26b"
+reasoning_effort = "none"
+# 出力はテキスト全文＋検出エンティティのJSON。入力とほぼ同じ長さの本文を返させるため、
+# 他の工程より大きめに取る。ここを切りすぎるとJSONが途中で切れ、スキーマ違反として
+# fail-closed（review_required）になる＝安全側には倒れるが人手が増える。
+max_output_tokens = 1200
+local_timeout_seconds = 120.0

@@ -84,6 +84,28 @@ CREATE TABLE IF NOT EXISTS fax_deliveries (
     file_path TEXT NOT NULL,
     generated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 仮名化処理の監査記録（design/moegi/privacy.md §10）。
+-- ⚠️ 本文（原文・仮名化済み全文・日報/SOAP全文）と仮名対応表はこのテーブルに入れない。
+--    detected_counts は「種別 → 件数」のJSONで、検出した値そのものは含まない。
+--    仮名対応表は別DBファイル（data/privacy_vault.db・暗号化）に置く。
+CREATE TABLE IF NOT EXISTS privacy_audits (
+    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT NOT NULL,
+    site_id TEXT NOT NULL DEFAULT '',
+    gate_status TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    detected_counts TEXT NOT NULL,
+    needs_human_review INTEGER NOT NULL,
+    residual_risk TEXT NOT NULL,
+    reason_codes TEXT NOT NULL,
+    duration_ms REAL NOT NULL,
+    local_model TEXT NOT NULL DEFAULT '',
+    proceeded_to_structuring INTEGER NOT NULL,
+    external_transmission INTEGER NOT NULL DEFAULT 0,
+    occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -346,6 +368,92 @@ def list_fax_deliveries(conn: sqlite3.Connection, run_id: str) -> list[dict[str,
         }
         for row in rows
     ]
+
+
+def save_privacy_audit(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    gate_status: str,
+    mode: str,
+    policy_version: str,
+    detected_counts: dict[str, int],
+    needs_human_review: bool,
+    residual_risk: str,
+    reason_codes: list[str],
+    duration_ms: float,
+    proceeded_to_structuring: bool,
+    site_id: str = "",
+    local_model: str = "",
+    external_transmission: bool = False,
+) -> None:
+    """仮名化処理の監査記録を1件残す（design/moegi/privacy.md §10）。
+
+    引数を明示的なキーワードだけに絞ってあるのは、呼び出し側が誤って本文
+    （原文・仮名化済みテキスト）を渡せないようにするため。**args/kwargs で
+    受けるとログ許可リストが意味を失う。
+    """
+    conn.execute(
+        """
+        INSERT INTO privacy_audits
+            (request_id, site_id, gate_status, mode, policy_version, detected_counts,
+             needs_human_review, residual_risk, reason_codes, duration_ms, local_model,
+             proceeded_to_structuring, external_transmission)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            site_id,
+            gate_status,
+            mode,
+            policy_version,
+            json.dumps(detected_counts, ensure_ascii=False),
+            int(needs_human_review),
+            residual_risk,
+            json.dumps(reason_codes, ensure_ascii=False),
+            duration_ms,
+            local_model,
+            int(proceeded_to_structuring),
+            int(external_transmission),
+        ),
+    )
+    conn.commit()
+
+
+def list_privacy_audits(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict[str, Any]]:
+    """監査記録を新しい順に返す（本文は元々入っていないのでそのまま画面に出せる）。"""
+    rows = conn.execute(
+        """
+        SELECT request_id, site_id, gate_status, mode, policy_version, detected_counts,
+               needs_human_review, residual_risk, reason_codes, duration_ms, local_model,
+               proceeded_to_structuring, external_transmission, occurred_at
+        FROM privacy_audits ORDER BY row_id DESC LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    columns = (
+        "request_id",
+        "site_id",
+        "gate_status",
+        "mode",
+        "policy_version",
+        "detected_counts",
+        "needs_human_review",
+        "residual_risk",
+        "reason_codes",
+        "duration_ms",
+        "local_model",
+        "proceeded_to_structuring",
+        "external_transmission",
+        "occurred_at",
+    )
+    results = []
+    for row in rows:
+        record = dict(zip(columns, row))
+        record["detected_counts"] = json.loads(record["detected_counts"])
+        record["reason_codes"] = json.loads(record["reason_codes"])
+        results.append(record)
+    return results
 
 
 def record_from_llm_result(conn: sqlite3.Connection, run_id: str, stage: str, result: dict) -> None:

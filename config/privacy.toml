@@ -1,0 +1,37 @@
+# MOEGI 仮名化・Privacy Gate 設定（design/moegi/privacy.md）
+#
+# ⚠️ このファイルと環境変数 MOEGI_PRIVACY_MODE だけが mode の変更経路。
+#    HTTPリクエストからmodeを変える経路は実装していない（一般利用者がリクエスト単位で
+#    安全検査を無効化できないようにするため）。
+
+# 仮名化ポリシーのバージョン。ルール・辞書・判定基準を変えたら必ず上げること
+# （監査記録に残り、「どのポリシーで仮名化された記録か」を後から追える）。
+policy_version = "2026-08-12.1"
+
+# 段階導入（design/moegi/privacy.md §Privacy Gate）:
+#   observe : 検出・記録のみ。不合格でも既存処理へ進む
+#   shadow  : ブロック予定を画面に表示するが既存処理は継続する
+#   enforce : passed 以外は既存処理を呼ばない（本番の最終目標）
+mode = "enforce"
+
+# 入力長上限（正規表現のReDoS回避と、巨大入力によるローカルLLM占有の両方を兼ねる）。
+# 超過は fail-closed（blocked）。訪問1回ぶんの発話は通常2000字未満。
+max_input_chars = 20000
+
+# ローカルLLMによる文脈依存情報の補完検出を行うか。
+# false にするとルール＋辞書だけで判定する（ローカルLLM不在の環境向け）。
+llm_detection = true
+
+# 許容する残存リスク。これを超えたら needs_human_review 扱い（low | medium | high）。
+max_residual_risk = "low"
+
+# 入力と出力の差分が大きすぎる場合の閾値（削られた文字数 ÷ 入力文字数）。
+# 臨床上重要な情報（病名・服薬・バイタル）まで削除された可能性を検知する。
+max_removal_ratio = 0.5
+
+# 仮名対応表の保存期間（日）。超過分は purge_expired() で削除できる。
+retention_days = 90
+
+# ローカル辞書（患者・家族・職員・医師・施設）。リポジトリ相対パス。
+# 実運用では事業所側の実マスタに差し替える想定（このファイルは合成データ）。
+dictionary_path = "config/pseudonym_dictionary_sample.toml"

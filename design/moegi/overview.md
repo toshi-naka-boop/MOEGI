@@ -47,16 +47,19 @@ flowchart TD
 
     STORE -.->|"D6未着手"| LINE[LINE配布<br/>キュー型・store&forward]
 
-    subgraph nippou["日報エージェント (nippou.py) — 要配慮個人情報を扱う唯一の工程"]
-        MIC["🎙モバイル録音UI(R-80)<br/>MediaRecorder→.webm"] -->|文字起こし| GEMMA
-        GWS["GWS音声入力(主・実運用)<br/>faster-whisper(オフライン代替)"] -->|文字起こし| GEMMA["gemma4:26b<br/>backend: local(常時固定)<br/>コールド17.8秒/ウォーム3.4秒"]
+    subgraph nippou["日報・SOAPエージェント (nippou.py) — 要配慮個人情報を扱う工程"]
+        MIC["🎙モバイル録音UI(R-80)<br/>MediaRecorder→.webm"] -->|文字起こし| PGATE
+        GWS["GWS音声入力(主・実運用)<br/>faster-whisper(オフライン代替)"] -->|文字起こし| PGATE
+        PGATE["🔒 Privacy Gate (privacy/)<br/>ルール→辞書→ローカルLLM→再検査<br/>passed以外は構造化を呼ばない"]
+        PGATE -->|仮名化済みテキスト| GEMMA["gemma4:26b<br/>backend: local(常時固定)<br/>日報 structure() / SOAP structure_soap()"]
         BTN["処置ボタン10項目(R-80)<br/>LLMを経由せず格納"] --> GEMMA
+        PGATE -.->|仮名→実名| VAULT[("仮名対応表<br/>privacy_vault.db<br/>AES-256-GCM")]
     end
     GEMMA -.->|"接続点1箇所(D6未着手)"| SITE
 
     classDef done fill:#d4edda,stroke:#2e7d32,color:#1a1a1a
     classDef pending fill:#f5f5f5,stroke:#999,color:#666,stroke-dasharray: 4 3
-    class OLD,NEW,SITE,INGEST,DIFF,REQ,MATCH,DRAFT,STORE,UI,ORCAFB,LOCALFB,FAX,MIC,GWS,GEMMA,BTN,nippou done
+    class OLD,NEW,SITE,INGEST,DIFF,REQ,MATCH,DRAFT,STORE,UI,ORCAFB,LOCALFB,FAX,MIC,GWS,GEMMA,BTN,nippou,PGATE,VAULT done
     class LINE pending
 ```
 
@@ -76,6 +79,7 @@ flowchart TD
 | D5 | 配布（FAXプレビュー）・日報エージェント実装・オフライン薄通し・D1相当ゲート再実測・G9再測定 | ✅ 完了（2026-08-11） |
 | D5フォローアップ | G9バッジ削除(R-75)・FAX配信履歴(R-76)・UX修正2件(R-78)・ORCA3段フォールバック(R-79)・モバイル日報UI(R-80) | ✅ **完了（2026-08-12・ユーザーレビュー反映）** |
 | D5フォローアップ2 | N-8対策(a)(b)実装採用・オーケストレーションLLM実験実装（/design-loop・批評round-4） | ✅ **完了（2026-08-12深夜・ユーザー就寝中に自律実施）** |
+| セキュリティ層 | 仮名化・Privacy Gate（ルール／辞書／ローカルLLM／再検査／fail-closed／仮名対応表の暗号化保管／ログサニタイザー／監査記録）＋ SOAP構造化の追加 | ✅ **完了（2026-08-12）**。仕様は [privacy.md](./privacy.md) |
 | D6 | LINEキュー型チャネル・G6周りのUI（処置ボタンは前倒し実装済み）・**§7台本#6を実ワークフローに合わせて作り直す**（ドラフト済み・要レビュー）・実機スマホでの録音UI確認・チェックリスト項目の不変ID設計（要判断） | ⬜ 未着手 |
 | D7 | オフライン本番通し・精度差実測・Before動画・台本確定 | ⬜ 未着手 |
 | D8 | 予備日・通しリハ | ⬜ 未着手 |
@@ -88,6 +92,21 @@ flowchart TD
 - **3段フォールバックの実機動作（R-79）**: 主モデルに存在しないモデル名を指定→自動で`orcarouter/auto`へ切替、6.6秒で正常応答
 - **オフライン完走**: ORCA・別プロバイダとも到達不能な場合のみローカル（gemma4:26b）へ落ち、完走を確認
 - **N-8対策の実測比較（2026-08-12深夜、各設定4回計測の平均）**: 変更前66.7%/40.5% → 兄弟項目の可視化のみ（採用）再現率平均83.3%/誤検出率平均13.7% → オーケストレーションLLM追加（不採用）再現率平均**70.9%**（低下）/誤検出率平均11.3%。1回目の実測（83.3%/7.1%）は良い方向に振れたrunだった
+
+## 製品化に向けて必要になるもの（ハッカソン範囲外・今後の展望）
+
+セキュリティ層を実装した結果、「デモとして成立する」ことと「実運用に載せられる」ことの
+差がはっきりしたので、ここに残しておく。詳細は [privacy.md](./privacy.md) §10。
+
+1. **患者・家族・職員・施設のマスタ連携** — 現在の仮名化辞書
+   （`config/pseudonym_dictionary_sample.toml`）は完全な合成データ。実運用では事業所の
+   実マスタ（電子カルテ・人事システム）との同期が必要で、**その同期経路自体が新しい
+   外部通信・アクセス制御の検討対象**になる。
+2. **認証・認可** — 現在アプリに認証は無い。実名を画面に出す経路を作らないことで最悪ケースは
+   避けているが、実運用には**ユーザー認証とロールベースの認可**（仮名対応表の復号権限、
+   Privacy Gateのモード変更権限、監査記録の閲覧権限）が必須。
+3. **仮名の不変ID** — 現在の仮名は1リクエスト内でしか一貫しない。記録の横断分析には
+   利用者の不変IDが要る（下記「詰まっている点」#1 と同じ論点）。
 
 ## 今、詰まっている点（要ユーザー判断・確認）
 
@@ -121,6 +140,7 @@ LINE store-and-forward、Before/After比較画面はまだ実装されていな�
 ## 参照
 
 - 詳細仕様: [design.md](./design.md)
+- 仮名化・Privacy Gate（セキュリティ層）: [privacy.md](./privacy.md)
 - 決定履歴・却下案の理由: [ledger.md](./ledger.md)
 - 機械可読な現在状態: [state.json](./state.json)
 - N-11批評原文: [reviews/round-3-opus.md](./reviews/round-3-opus.md) / [reviews/round-3-sonnet.md](./reviews/round-3-sonnet.md)

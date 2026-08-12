@@ -21,10 +21,19 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from moegi import fax, ingest, llm, nippou, pipeline, store
+from moegi import fax, ingest, llm, nippou, pipeline, privacy, store
+from moegi.privacy import vault as privacy_vault
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _FAX_OUTPUT_DIR = _REPO_ROOT / "data" / "fax_previews"
+
+# design/moegi/privacy.md §10: uvicorn・httpx を含む logging 経由の出力に
+# サニタイザーを差し込む。アプリの起動より前（モジュール読み込み時）に行う。
+privacy.install_log_sanitizer()
+
+# 設定の読み込みに失敗したらアプリを起動させない（fail-closed）。
+# 「検査設定が読めないまま検査なしで動いてしまう」のが最悪なので、静かに既定値へ落とさない。
+PRIVACY_CONFIG = privacy.load_privacy_config()
 
 # ledger R-77・R-80: 処置内容はLLMの自由記述抽出に任せず、ボタン選択式（複数選択可）にする
 # （処置名の表記揺れ・誤認識リスクを避けるため）。design.md §6.5「処置入力のボタン選択UI
@@ -236,7 +245,8 @@ def index() -> HTMLResponse:
     <h2>過去の実行</h2>
     {run_list}
     <h2>日報エージェント</h2>
-    <p><a href="/nippou">日報の文字起こし→構造化を試す</a>（design.md §6.5・要配慮個人情報のためローカル固定）</p>
+    <p><a href="/nippou">日報・SOAPの文字起こし→仮名化→構造化を試す</a>（design.md §6.5・要配慮個人情報のためローカル固定）</p>
+    <p><a href="/privacy/audits">仮名化処理の監査記録</a>（design/moegi/privacy.md §10）</p>
     """
     return _render_page(body)
 
@@ -499,10 +509,21 @@ def nippou_form() -> HTMLResponse:
     <p class="run-warning">⚠️ 要配慮個人情報を扱うため常にローカル（gemma4:26b）で処理します（ledger N-11）。
     訪問時の移動中、または現場での録音許可が取れている場合はマイクボタンで録音してください
     （ledger R-80）。電波が無い場所でも録音自体はでき、あとで構造化できます。</p>
+    <p class="run-warning">🔒 文字起こしのあと、日報・SOAPを作る前に<strong>仮名化・安全検査（Privacy Gate）</strong>を
+    通します（現在のモード: <strong>{html.escape(PRIVACY_CONFIG.mode)}</strong>）。
+    氏名・電話番号・住所・生年月日などの直接識別子を仮名へ置換し、検査に通らなかった場合は
+    構造化へ進まず確認画面を出します。この処理では外部LLMへの送信は行われません。
+    <a href="/privacy/audits">監査記録を見る</a></p>
 
     <form method="post" action="/nippou/structure" enctype="multipart/form-data" id="nippou-form">
       <label>処置内容（複数選択可・ledger R-77: LLMではなくボタン選択で確定）</label>
       <div class="procedure-buttons">{procedure_checkboxes}</div>
+
+      <label>出力形式</label>
+      <div class="procedure-buttons">
+        <span class="procedure-pill">日報（チェックリスト照合）— 常に作成</span>
+        <label class="procedure-pill"><input type="checkbox" name="soap" checked>SOAP形式でも記録する</label>
+      </div>
 
       <label>録音</label>
       <div class="record-controls">
@@ -589,18 +610,229 @@ def nippou_form() -> HTMLResponse:
     return _render_page(body)
 
 
+def _soap_record_html(record: nippou.SoapRecord) -> str:
+    if record.undecidable:
+        return (
+            "<h2>SOAP形式</h2>"
+            "<p class='run-warning'>ローカルLLMがSOAP構造化を完了できませんでした（判定不能）。"
+            "内容を確認して、もう一度お試しください。</p>"
+        )
+    rows = "".join(
+        f"<tr><th style='text-align:left; vertical-align:top; white-space:nowrap; padding:0.3rem 0.8rem 0.3rem 0;'>{label}</th>"
+        f"<td style='padding:0.3rem 0;'>{html.escape(value) if value else '<span class=\"meta\">（該当する記載なし）</span>'}</td></tr>"
+        for label, value in (
+            ("S（主観的情報）", record.subjective),
+            ("O（客観的情報）", record.objective),
+            ("A（アセスメント）", record.assessment),
+            ("P（計画）", record.plan),
+        )
+    )
+    return f"""
+    <h2>SOAP形式（utterance_id={html.escape(record.utterance_id)}）</h2>
+    <table style="width:100%; border-collapse: collapse;">{rows}</table>
+    """
+
+
+#: Privacy Gate の状態 → 画面表示（design/moegi/privacy.md §12）。
+#: 「匿名化済み」「完全に安全」とは書かない——仮名化後も要配慮個人情報は残る。
+_GATE_MESSAGES = {
+    privacy.PrivacyGateStatus.PASSED: "直接識別子を仮名化しました。仮名化後も病状・服薬などの要配慮個人情報は残ります。",
+    privacy.PrivacyGateStatus.REVIEW_REQUIRED: "個人を特定し得る情報が残っている可能性があります。候補を確認してから処理を続けてください。",
+    privacy.PrivacyGateStatus.BLOCKED: "セキュリティ検査で停止しました。記録に残してはいけない情報（保険証番号・認証情報など）が含まれています。",
+    privacy.PrivacyGateStatus.FAILED: "セキュリティ検査を完了できませんでした。処理を中止しました。",
+    privacy.PrivacyGateStatus.PENDING: "セキュリティ検査中です。",
+}
+
+#: 停止・確認の理由コード → 現場向けの日本語（値そのものは決して出さない）。
+_REASON_MESSAGES = {
+    "empty_input": "入力が空です",
+    "input_too_long": "入力が長すぎます",
+    "mojibake_input": "文字化けした入力を検出しました",
+    "dictionary_unavailable": "事業所マスタ辞書を読み込めませんでした",
+    "ambiguous_name": "同姓同名など、一意に特定できない氏名があります",
+    "excessive_removal": "元の内容から削られた量が多く、必要な情報まで消えた可能性があります",
+    "residual_risk_above_threshold": "残存リスクが許容値を超えています",
+    "vault_save_failed": "仮名対応表を保存できませんでした",
+    "llm_timeout": "ローカルLLMの補完検出がタイムアウトしました",
+    "llm_unavailable": "ローカルLLMへ接続できませんでした",
+    "llm_invalid_json": "ローカルLLMの応答形式が不正でした",
+    "residual_registered_name": "仮名化後にも登録済みの氏名が残っています",
+}
+
+
+def _reason_text(code: str) -> str:
+    if code in _REASON_MESSAGES:
+        return _REASON_MESSAGES[code]
+    if code.startswith("schema_"):
+        return "ローカルLLMの応答がスキーマに違反しました"
+    if code.startswith("blocked_"):
+        return f"記録できない情報を検出しました（{code.removeprefix('blocked_')}）"
+    if code.startswith("residual_"):
+        return f"仮名化後にも検出されました（{code.removeprefix('residual_')}）"
+    return code
+
+
+def _gate_summary_html(result: privacy.GateResult) -> str:
+    """検出サマリ・Privacy Gate状態・外部送信の有無を表示する（§12）。
+
+    検出した「値」は出さず、種別と件数だけを出す。権限のない利用者に元の値を
+    見せないための最低条件で、画面に出さないものは画面から漏れない。
+    """
+    counts = (
+        "".join(
+            f"<span class='chip'>{html.escape(t)} {n}件</span> "
+            for t, n in sorted(result.detected_counts.items())
+        )
+        or "<span class='meta'>検出はありませんでした。</span>"
+    )
+    reasons = (
+        "<ul>" + "".join(f"<li>{html.escape(_reason_text(c))}</li>" for c in result.reason_codes) + "</ul>"
+        if result.reason_codes
+        else ""
+    )
+    shadow_note = ""
+    if result.mode != "enforce" and result.would_block:
+        shadow_note = (
+            "<p class='run-warning'>⚠️ 段階導入モード"
+            f"（{html.escape(result.mode)}）のため処理を継続しました。"
+            "本番（enforce）ではここで停止します。</p>"
+        )
+    return f"""
+    <div class="proposal">
+      <div class="meta">Privacy Gate ・ request_id {html.escape(result.request_id[:8])} ・
+        ポリシー {html.escape(result.policy_version)} ・ モード {html.escape(result.mode)}</div>
+      <p><strong>{html.escape(_GATE_MESSAGES[result.status])}</strong></p>
+      <div class="chips">{counts}</div>
+      {reasons}
+      {shadow_note}
+      <p class="meta">この処理では外部LLMへの送信は行われていません（仮名化・構造化ともローカル実行）。</p>
+    </div>
+    """
+
+
+def _recheck_form_html(sanitized_text: str, procedures: list[str], want_soap: bool) -> str:
+    """§12「修正して再検査」。仮名化済みテキストを人が直して再検査する。"""
+    hidden = "".join(
+        f"<input type='hidden' name='procedures' value='{html.escape(p)}'>" for p in procedures
+    )
+    soap_hidden = "<input type='hidden' name='soap' value='on'>" if want_soap else ""
+    return f"""
+    <h2>修正して再検査</h2>
+    <p class="meta">残っている個人情報を手で消してから再検査してください。ここに表示されているのは
+      仮名化済みのテキストです（元の値は表示されません）。</p>
+    <form class="edit-form" method="post" action="/nippou/recheck">
+      {hidden}{soap_hidden}
+      <textarea name="sanitized_text" rows="6">{html.escape(sanitized_text)}</textarea>
+      <button type="submit">修正して再検査する</button>
+    </form>
+    """
+
+
+def _run_privacy_gate(text: str, *, adapter) -> privacy.GateResult:
+    """Privacy Gate を実行し、監査記録を残す（本文は記録しない）。"""
+    vault_conn = None
+    try:
+        vault_conn = privacy_vault.connect()
+    except Exception:  # noqa: BLE001 — 対応表DBを開けないこと自体は gate 側が fail-closed で扱う
+        vault_conn = None
+    try:
+        return privacy.run_gate(text, config=PRIVACY_CONFIG, adapter=adapter, vault_conn=vault_conn)
+    finally:
+        if vault_conn is not None:
+            vault_conn.close()
+
+
+def _save_privacy_audit(result: privacy.GateResult, *, proceeded: bool) -> None:
+    conn = _db_conn()
+    try:
+        store.save_privacy_audit(
+            conn,
+            request_id=result.request_id,
+            gate_status=result.status.value,
+            mode=result.mode,
+            policy_version=result.policy_version,
+            detected_counts=result.detected_counts,
+            needs_human_review=result.needs_human_review,
+            residual_risk=result.residual_risk,
+            reason_codes=result.reason_codes,
+            duration_ms=result.duration_ms,
+            local_model=result.local_model,
+            proceeded_to_structuring=proceeded,
+            external_transmission=result.external_transmission,
+        )
+    finally:
+        conn.close()
+
+
+def _structure_and_render(result: privacy.GateResult, procedures: list[str], want_soap: bool) -> HTMLResponse:
+    """Privacy Gate の結果を受けて、通過していれば既存の構造化処理を呼ぶ。
+
+    **この関数がセキュリティ層と既存処理の唯一の接続点**。
+    cleared_for_downstream() が False の場合、agent.structure() /
+    structure_soap() を一切呼ばずに戻る（fail-closed）。
+    """
+    header = "<h1>日報エージェント（design.md §6.5）</h1><p><a href='/nippou'>← もう一度試す</a></p>"
+
+    if not privacy.cleared_for_downstream(result):
+        _save_privacy_audit(result, proceeded=False)
+        body = (
+            header
+            + _gate_summary_html(result)
+            + _recheck_form_html(result.sanitized_text, procedures, want_soap)
+        )
+        return _render_page(body)
+
+    sitedoc = pipeline.load_sitedoc()
+    adapter = llm.LLMAdapter()
+    try:
+        agent = nippou.NippouAgent(adapter)
+        agent.set_checklist(sitedoc.items)
+        utterance_id = result.request_id[:8]
+        record = agent.structure(
+            result.sanitized_text, utterance_id=utterance_id, procedures=procedures
+        )
+        soap = (
+            agent.structure_soap(
+                result.sanitized_text, utterance_id=utterance_id, procedures=procedures
+            )
+            if want_soap
+            else None
+        )
+    finally:
+        adapter.close()
+
+    _save_privacy_audit(result, proceeded=True)
+
+    body = (
+        header
+        + _gate_summary_html(result)
+        + "<h2>発話内容（仮名化済み）</h2>"
+        + f"<p class='trace-text'>{html.escape(result.sanitized_text)}</p>"
+        + _nippou_record_html(record)
+        + (_soap_record_html(soap) if soap is not None else "")
+    )
+    return _render_page(body)
+
+
 @app.post("/nippou/structure", response_class=HTMLResponse)
 def nippou_structure(
     utterance_text: str = Form(""),
     procedures: list[str] = Form([]),
+    soap: str = Form(""),
     audio: UploadFile | None = File(None),
 ) -> HTMLResponse:
-    sitedoc = pipeline.load_sitedoc()
+    """文字起こし → **Privacy Gate** → 既存の日報・SOAP構造化。
+
+    design/moegi/privacy.md §4 のデータフローどおり、既存処理の直前に検査層を挟む。
+    ⚠️ Privacy Gate のモード（observe/shadow/enforce）はリクエストから受け取らない。
+       一般利用者がリクエスト単位で安全検査を無効化できないようにするため、
+       設定ファイルと環境変数だけが変更経路になっている（privacy/config.py）。
+    """
+    want_soap = bool(soap)
     adapter = llm.LLMAdapter()
     tmp_path: Path | None = None
     try:
         agent = nippou.NippouAgent(adapter)
-        agent.set_checklist(sitedoc.items)
         if audio is not None and audio.filename:
             suffix = Path(audio.filename).suffix or ".webm"
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -609,17 +841,80 @@ def nippou_structure(
             text = agent.transcribe(tmp_path)
         else:
             text = agent.transcribe(utterance_text)
-        record = agent.structure(text, utterance_id=store.new_run_id()[:8], procedures=procedures)
+        gate_result = _run_privacy_gate(text, adapter=adapter)
     finally:
         adapter.close()
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
+        # 原文はここから先へ持ち出さない（ローカル変数を明示的に手放す）。
+        text = ""
+
+    return _structure_and_render(gate_result, procedures, want_soap)
+
+
+@app.post("/nippou/recheck", response_class=HTMLResponse)
+def nippou_recheck(
+    sanitized_text: str = Form(...),
+    procedures: list[str] = Form([]),
+    soap: str = Form(""),
+) -> HTMLResponse:
+    """§12「修正して再検査」。人が直した仮名化済みテキストを、同じGateにもう一度通す。
+
+    再検査でも検査の厳しさは変えない（人が触ったから緩める、をしない）。
+    """
+    want_soap = bool(soap)
+    adapter = llm.LLMAdapter()
+    try:
+        gate_result = _run_privacy_gate(sanitized_text, adapter=adapter)
+    finally:
+        adapter.close()
+    return _structure_and_render(gate_result, procedures, want_soap)
+
+
+@app.get("/privacy/audits", response_class=HTMLResponse)
+def privacy_audits() -> HTMLResponse:
+    """仮名化処理の監査記録（design/moegi/privacy.md §10）。
+
+    このテーブルには本文も対応表も入っていないので、そのまま画面に出せる。
+    """
+    conn = _db_conn()
+    try:
+        audits = store.list_privacy_audits(conn)
+    finally:
+        conn.close()
+
+    if not audits:
+        rows = "<p class='meta'>まだ監査記録がありません。</p>"
+    else:
+        rows = "".join(
+            f"<div class='proposal'>"
+            f"<div class='meta'>{html.escape(a['occurred_at'])} ・ request_id {html.escape(a['request_id'][:8])}"
+            f" ・ ポリシー {html.escape(a['policy_version'])} ・ モード {html.escape(a['mode'])}</div>"
+            f"<div class='chips'><span class='chip'>{html.escape(a['gate_status'])}</span>"
+            + "".join(
+                f"<span class='chip'>{html.escape(t)} {n}件</span>"
+                for t, n in sorted(a["detected_counts"].items())
+            )
+            + f"<span class='confidence'>{a['duration_ms']:.0f}ms</span></div>"
+            f"<p class='meta'>構造化へ進んだ: {'はい' if a['proceeded_to_structuring'] else 'いいえ'}"
+            f" ／ 外部送信: {'あり' if a['external_transmission'] else 'なし'}"
+            f" ／ 人の確認が必要: {'はい' if a['needs_human_review'] else 'いいえ'}</p>"
+            + (
+                "<p class='meta'>"
+                + "、".join(html.escape(_reason_text(c)) for c in a["reason_codes"])
+                + "</p>"
+                if a["reason_codes"]
+                else ""
+            )
+            + "</div>"
+            for a in audits
+        )
 
     body = f"""
-    <h1>日報エージェント（design.md §6.5）</h1>
-    <p><a href="/nippou">← もう一度試す</a></p>
-    <h2>発話内容</h2>
-    <p class="trace-text">{html.escape(text)}</p>
-    {_nippou_record_html(record)}
+    <h1>仮名化処理の監査記録</h1>
+    <p class="meta">記録しているのは種別と件数だけです。文字起こし原文・仮名化済み全文・
+      日報／SOAP全文・仮名対応表はこのテーブルに保存していません
+      （design/moegi/privacy.md §10）。</p>
+    {rows}
     """
     return _render_page(body)

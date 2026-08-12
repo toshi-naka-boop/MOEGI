@@ -15,6 +15,10 @@ dependencies = [
     "python-multipart==0.0.20",
     "faster-whisper==1.2.1",
     "weasyprint==69.0",
+    # 仮名対応表の保存時暗号化（AES-256-GCM・design/moegi/privacy.md §9）。
+    # pdfplumber → pdfminer.six の推移的依存として既に入っていたものを、直接依存として明示する
+    # （独自の暗号方式は作らない方針。ライセンスは Apache-2.0 OR BSD-3-Clause）。
+    "cryptography>=45,<51",
 ]
 
 [project.optional-dependencies]

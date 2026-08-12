@@ -1,0 +1,91 @@
+# MOEGI 仮名化ローカル辞書（合成データ・design/moegi/privacy.md §辞書）
+#
+# ⚠️ 実在する患者・家族・職員・医療機関の情報は一切含まない完全な架空データ。
+#    config/sitedoc_sample.toml と同じ扱いで、実運用では事業所側の実マスタに差し替える。
+#
+# ⚠️ この辞書の内容は外部へ送信しない。ローカルLLMのプロンプトにも入れない
+#    （辞書は突き合わせにのみ使い、突き合わせはコード側で行う）。
+#
+# aliases: 音声認識で表記が崩れた形・読み・愛称・略称。完全一致で照合する。
+# surname_needs_honorific = true（既定）の姓は、「さん/様/氏/先生/ちゃん」等の
+# 敬称を伴う場合だけ検出する（一般名詞との衝突を避けるため）。
+
+[[patients]]
+full_name = "山田 太郎"
+aliases = ["山田太郎", "やまだたろう", "ヤマダタロウ", "山田 たろう"]
+surname = "山田"
+patient_ids = ["P-100234", "利用者番号 100234"]
+
+[[patients]]
+full_name = "佐藤 花子"
+aliases = ["佐藤花子", "さとうはなこ", "サトウハナコ"]
+surname = "佐藤"
+patient_ids = ["P-100987"]
+
+# 同姓同名（design/moegi/privacy.md §残存リスク）: 表記が同じ患者が2人いる場合、
+# どちらか判定できないので検出はするが人による確認を必須にする。
+[[patients]]
+full_name = "鈴木 一郎"
+aliases = ["鈴木一郎"]
+surname = "鈴木"
+patient_ids = ["P-100555"]
+
+[[patients]]
+full_name = "鈴木 一郎"
+aliases = ["鈴木一郎"]
+surname = "鈴木"
+patient_ids = ["P-100556"]
+
+[[families]]
+full_name = "山田 花子"
+aliases = ["山田花子", "花子さん", "花子"]
+relation = "長女"
+patient_ref = "山田 太郎"
+
+[[families]]
+full_name = "山田 次郎"
+aliases = ["山田次郎", "次郎さん"]
+relation = "配偶者"
+patient_ref = "山田 太郎"
+
+[[staff]]
+full_name = "森 美咲"
+aliases = ["森美咲", "もりみさき", "森ナース"]
+surname = "森"
+role = "看護師"
+
+[[staff]]
+full_name = "川口 健"
+aliases = ["川口健", "かわぐちけん"]
+surname = "川口"
+role = "理学療法士"
+
+[[doctors]]
+full_name = "高橋 誠"
+aliases = ["高橋誠", "高橋ドクター", "たかはしまこと"]
+surname = "高橋"
+organization = "みどり内科クリニック"
+
+[[facilities]]
+name = "みどり内科クリニック"
+aliases = ["みどりクリニック", "みどり内科"]
+kind = "医療機関"
+
+[[facilities]]
+name = "◯◯訪問看護ステーション"
+aliases = ["まるまる訪問看護ステーション"]
+kind = "訪問看護ステーション"
+
+[[facilities]]
+name = "あおぞら介護老人保健施設"
+aliases = ["あおぞら老健"]
+kind = "施設"
+
+# 登録済み住所・電話番号（マスタ由来）。ルールベースで拾えない表記も確実に落とす。
+[[addresses]]
+value = "東京都新宿区西新宿2-8-1"
+aliases = ["新宿区西新宿2-8-1"]
+
+[[phones]]
+value = "03-5321-1111"
+aliases = ["0353211111"]
