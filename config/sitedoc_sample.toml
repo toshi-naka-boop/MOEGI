@@ -8,46 +8,59 @@
 # （design.md §2 のデモアンカー c=第4の4「評価の記録」は完全新設であり、
 #   このチェックリストに既存項目が無いことがデモの前提のため）。
 
+# ⚠️ `id` は**不変の識別子**（ledger R-88）。更新案が承認されて `label` が書き換わっても
+#    `id` は変えないこと。過去の判定結果・日報レコード・月報の集計はこの `id` で
+#    突き合わせるため、ここを変えると履歴の連続性が切れる。
+#    `label` は現場に表示する文言で、更新案によって書き換わる前提。
+
 id = "oo-houmon-kango-station"
 kind = "チェックリスト"
 title = "訪問看護記録チェックリスト（◯◯訪問看護ステーション）"
 
 [[items]]
+id = "visit-time"
 label = "訪問開始・終了時刻の記録"
 kind = "自由記述"
 required = true
 
 [[items]]
+id = "service-duration"
 label = "指定訪問看護の実施に要した時間の記録"
 kind = "自由記述"
 required = true
 
 [[items]]
+id = "visit-frequency"
 label = "訪問日数・訪問頻度の記録"
 kind = "自由記述"
 required = true
 
 [[items]]
+id = "short-visit-reason"
 label = "1回の訪問時間が標準（30分〜1時間30分）を下回る場合の理由記録"
 kind = "自由記述"
 required = false
 
 [[items]]
+id = "brief-visit-record"
 label = "短時間訪問（20分以上30分未満）の実施記録"
 kind = "自由記述"
 required = false
 
 [[items]]
+id = "nursing-goal"
 label = "利用者の看護目標"
 kind = "自由記述"
 required = true
 
 [[items]]
+id = "vital-signs"
 label = "バイタルサインの記録"
 kind = "自由記述"
 required = true
 
 [[items]]
+id = "remarks"
 label = "特記事項"
 kind = "自由記述"
 required = false

@@ -24,7 +24,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-#: バイタルらしき記述を探すチェックリスト項目のラベル（部分一致）。
+#: バイタルらしき記述を探すチェックリスト項目。不変ID（ledger R-88）で当てるのが本筋だが、
+#: 不変ID導入前に保存された日報にはキーが無いので、ラベルの部分一致もフォールバックとして残す。
+_VITAL_ITEM_KEY = "vital-signs"
 _VITAL_ITEM_HINT = "バイタル"
 
 # すべて上限つき量化子・ネストなし（rules.py と同じ ReDoS 方針）。
@@ -54,11 +56,16 @@ class VitalPoint:
 
 @dataclass
 class ItemFillRate:
-    """チェックリスト項目1つぶんの、その月の記入状況。"""
+    """チェックリスト項目1つぶんの、その月の記入状況。
+
+    ledger R-88: 集計のキーは `key`（不変ID）。`label` は表示用の文言で、
+    月の途中で更新案が承認されると変わり得る（その場合は最新のラベルを表示する）。
+    """
 
     label: str
     filled: int
     total: int
+    key: str = ""
 
     @property
     def rate(self) -> float:
@@ -100,7 +107,9 @@ def _vital_source_text(record: dict) -> str:
     """
     parts: list[str] = []
     for item in record.get("items") or []:
-        if _VITAL_ITEM_HINT in str(item.get("checklist_item_id", "")):
+        key = str(item.get("checklist_item_key") or "")
+        label = str(item.get("checklist_item_id", ""))
+        if key == _VITAL_ITEM_KEY or (not key and _VITAL_ITEM_HINT in label):
             parts.append(str(item.get("value") or ""))
     soap = record.get("soap") or {}
     parts.append(str(soap.get("objective") or ""))
@@ -153,19 +162,26 @@ def build(records: list[dict], *, subject_pseudonym: str, year: int, month: int)
             report.procedure_counts[procedure] = report.procedure_counts.get(procedure, 0) + 1
 
     # チェックリスト項目の記入率。項目の並びは最初に現れた順を保つ（sitedocの順序に近い）。
+    #
+    # ledger R-88: 集計のキーは不変ID（checklist_item_key）。ラベルで束ねると、
+    # 更新案が承認されて文言が変わった月に**同じ項目が別項目として二重にカウントされる**。
+    # 表示に使うラベルは、その項目の最新（＝最後に記録された）ものを採る。
     totals: dict[str, int] = {}
     filled: dict[str, int] = {}
+    labels: dict[str, str] = {}
     for record in records:
         for item in record.get("items") or []:
             label = str(item.get("checklist_item_id", ""))
-            if not label:
+            key = str(item.get("checklist_item_key") or "") or label
+            if not key:
                 continue
-            totals[label] = totals.get(label, 0) + 1
+            totals[key] = totals.get(key, 0) + 1
+            labels[key] = label or key
             if item.get("filled"):
-                filled[label] = filled.get(label, 0) + 1
+                filled[key] = filled.get(key, 0) + 1
     report.item_fill_rates = [
-        ItemFillRate(label=label, filled=filled.get(label, 0), total=total)
-        for label, total in totals.items()
+        ItemFillRate(label=labels.get(key, key), filled=filled.get(key, 0), total=total, key=key)
+        for key, total in totals.items()
     ]
 
     for record in records:

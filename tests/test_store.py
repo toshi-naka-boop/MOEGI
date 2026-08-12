@@ -256,3 +256,70 @@ class FaxDeliveryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImmutableItemKeyTest(unittest.TestCase):
+    """ledger R-88: impacts.sitedoc_item_key（不変ID）の保存・移行・突き合わせ。"""
+
+    def setUp(self):
+        self.conn = store.connect(":memory:")
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_migration_adds_the_column_to_an_existing_database(self):
+        # 旧スキーマ（sitedoc_item_key を持たない）のDBを作り、connect() で列が足されること。
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "legacy.db"
+            legacy = sqlite3.connect(path)
+            legacy.execute(
+                "CREATE TABLE impacts (row_id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,"
+                " change_row_id INTEGER NOT NULL, sitedoc_item_id TEXT, verdict TEXT NOT NULL,"
+                " rationale TEXT NOT NULL, confidence REAL NOT NULL, evidence_path TEXT,"
+                " evidence_quote TEXT, evidence_offset INTEGER)"
+            )
+            legacy.commit()
+            legacy.close()
+
+            conn = store.connect(path)
+            try:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(impacts)")}
+                self.assertIn("sitedoc_item_key", columns)
+            finally:
+                conn.close()
+
+    def _seed(self, *, item_label, item_key, status):
+        change = self.conn.execute(
+            "INSERT INTO changes (run_id, label, new_path, new_text, kind, summary)"
+            " VALUES ('r', 'd', 'p', 't', '改正', 's')"
+        ).lastrowid
+        impact = self.conn.execute(
+            "INSERT INTO impacts (run_id, change_row_id, sitedoc_item_id, sitedoc_item_key,"
+            " verdict, rationale, confidence) VALUES ('r', ?, ?, ?, '要更新', 'x', 0.9)",
+            (change, item_label, item_key),
+        ).lastrowid
+        self.conn.execute(
+            "INSERT INTO proposals (run_id, impact_row_id, before, after, status)"
+            " VALUES ('r', ?, 'b', 'a', ?)",
+            (impact, status),
+        )
+        self.conn.commit()
+
+    def test_precedents_are_found_by_immutable_id_after_a_label_change(self):
+        self._seed(item_label="特記事項", item_key="remarks", status="承認")
+        # 現在のラベルは書き換わっているが、不変IDで過去の判断を引ける
+        rows = store.list_reviewed_precedents_for_item(self.conn, "remarks")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "承認")
+
+    def test_precedents_fall_back_to_label_for_legacy_rows(self):
+        self._seed(item_label="特記事項", item_key=None, status="承認")
+        rows = store.list_reviewed_precedents_for_item(self.conn, "特記事項")
+        self.assertEqual(len(rows), 1)
+
+    def test_unreviewed_proposals_are_excluded(self):
+        self._seed(item_label="特記事項", item_key="remarks", status="未承認")
+        self.assertEqual(store.list_reviewed_precedents_for_item(self.conn, "remarks"), [])

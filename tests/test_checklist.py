@@ -22,8 +22,57 @@ def _sitedoc(*labels: str) -> SiteDoc:
     )
 
 
-def _proposal(item_label: str | None, after: str, status: str = "承認") -> dict:
-    return {"sitedoc_item_id": item_label, "after": after, "status": status}
+def _proposal(
+    item_label: str | None, after: str, status: str = "承認", item_key: str | None = None
+) -> dict:
+    return {
+        "sitedoc_item_id": item_label,
+        "sitedoc_item_key": item_key,
+        "after": after,
+        "status": status,
+    }
+
+
+def _sitedoc_with_ids(*pairs: tuple[str, str]) -> SiteDoc:
+    return SiteDoc(
+        id="site-1",
+        kind="チェックリスト",
+        title="テスト用チェックリスト",
+        items=[
+            ChecklistItem(sitedoc_id="site-1", label=label, kind="自由記述", item_id=item_id)
+            for item_id, label in pairs
+        ],
+    )
+
+
+class ChecklistItemKeyTest(unittest.TestCase):
+    """ledger R-88: 同一性は item_id、表示は label。"""
+
+    def test_key_prefers_immutable_id(self):
+        item = ChecklistItem(sitedoc_id="s", label="バイタルサインの記録", kind="自由記述", item_id="vital-signs")
+        self.assertEqual(item.key, "vital-signs")
+
+    def test_key_falls_back_to_label_for_legacy_items(self):
+        item = ChecklistItem(sitedoc_id="s", label="バイタルサインの記録", kind="自由記述")
+        self.assertEqual(item.key, "バイタルサインの記録")
+
+    def test_key_survives_a_label_change(self):
+        from dataclasses import replace
+
+        item = ChecklistItem(sitedoc_id="s", label="旧文言", kind="自由記述", item_id="vital-signs")
+        renamed = replace(item, label="新しい文言（SpO2を含む）")
+        self.assertEqual(item.key, renamed.key)
+
+    def test_repository_sitedoc_defines_ids_for_every_item(self):
+        from moegi.pipeline import load_sitedoc
+
+        sitedoc = load_sitedoc()
+        for item in sitedoc.items:
+            with self.subTest(label=item.label):
+                self.assertTrue(item.item_id, f"{item.label} に不変IDが無い")
+                self.assertNotEqual(item.item_id, item.label)
+        ids = [i.item_id for i in sitedoc.items]
+        self.assertEqual(len(ids), len(set(ids)), "不変IDが重複している")
 
 
 class ApplyApprovedTest(unittest.TestCase):
@@ -86,6 +135,35 @@ class ApplyApprovedTest(unittest.TestCase):
     def test_no_change_when_label_is_identical(self):
         diff = checklist.apply_approved(self.sitedoc, [_proposal("特記事項", "特記事項")])
         self.assertEqual(diff.changed, [])
+
+    def test_matches_by_immutable_id_after_the_label_changed(self):
+        """ledger R-88 の本題。ラベルが既に書き換わっていても不変IDで当たること。"""
+        sitedoc = _sitedoc_with_ids(("remarks", "特記事項（頻回訪問の理由を含む）"))
+        # 更新案が記録された時点のラベルは「特記事項」（既に古い）
+        diff = checklist.apply_approved(
+            sitedoc,
+            [_proposal("特記事項", "特記事項（頻回訪問の理由と評価を含む）", item_key="remarks")],
+        )
+        self.assertEqual(diff.unmatched, [])
+        self.assertEqual(len(diff.changed), 1)
+        self.assertEqual(diff.after.items[0].label, "特記事項（頻回訪問の理由と評価を含む）")
+        self.assertEqual(diff.after.items[0].key, "remarks")  # IDは変わらない
+
+    def test_label_fallback_still_works_for_legacy_proposals(self):
+        # 不変ID導入前に記録された更新案（key が NULL）はラベルで当てる。
+        sitedoc = _sitedoc_with_ids(("remarks", "特記事項"))
+        diff = checklist.apply_approved(sitedoc, [_proposal("特記事項", "特記事項（改）", item_key=None)])
+        self.assertEqual(diff.unmatched, [])
+        self.assertEqual(len(diff.changed), 1)
+
+    def test_new_item_gets_a_stable_immutable_id(self):
+        first = checklist.apply_approved(self.sitedoc, [_proposal(None, "目標に対する評価の記録")])
+        second = checklist.apply_approved(self.sitedoc, [_proposal(None, "目標に対する評価の記録")])
+        new_id = first.after.items[-1].item_id
+        self.assertTrue(new_id)
+        self.assertNotEqual(new_id, "目標に対する評価の記録")
+        # 同じ更新案を2回適用しても同じID（Before/Afterをやり直しても紐付けがぶれない）
+        self.assertEqual(new_id, second.after.items[-1].item_id)
 
     def test_before_sitedoc_is_not_mutated(self):
         before_labels = [i.label for i in self.sitedoc.items]

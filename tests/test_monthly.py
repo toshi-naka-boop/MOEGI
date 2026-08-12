@@ -216,6 +216,63 @@ class MonthlyAggregationTest(unittest.TestCase):
             next(r for r in report.item_fill_rates if r.label == "特記事項").rate, 0.5
         )
 
+    def test_fill_rates_group_by_immutable_id_across_a_label_change(self):
+        """ledger R-88 の本題。月の途中で項目の文言が変わっても二重計上しないこと。
+
+        不変ID導入前は checklist_item_id（ラベル）で束ねていたため、更新案が承認された
+        月に**同じ項目が別項目として2行に割れて**記入率が実態より低く出ていた。
+        """
+        records = [
+            _record(
+                "2026-08-03",
+                items=[{"checklist_item_id": "特記事項", "checklist_item_key": "remarks", "filled": True}],
+            ),
+            _record(
+                "2026-08-20",  # 承認でラベルが書き換わった後の訪問
+                items=[
+                    {
+                        "checklist_item_id": "特記事項（頻回訪問の理由を含む）",
+                        "checklist_item_key": "remarks",
+                        "filled": True,
+                    }
+                ],
+            ),
+        ]
+        report = monthly.build(records, subject_pseudonym="PATIENT_x", year=2026, month=8)
+        self.assertEqual(len(report.item_fill_rates), 1)
+        rate = report.item_fill_rates[0]
+        self.assertEqual((rate.filled, rate.total), (2, 2))
+        self.assertEqual(rate.key, "remarks")
+        # 表示は最新のラベルを使う
+        self.assertEqual(rate.label, "特記事項（頻回訪問の理由を含む）")
+
+    def test_fill_rates_fall_back_to_label_for_legacy_records(self):
+        # 不変ID導入前に保存された日報（key なし）でも従来どおり集計できること。
+        records = [
+            _record("2026-08-03", items=[{"checklist_item_id": "特記事項", "filled": True}]),
+            _record("2026-08-20", items=[{"checklist_item_id": "特記事項", "filled": False}]),
+        ]
+        report = monthly.build(records, subject_pseudonym="PATIENT_x", year=2026, month=8)
+        self.assertEqual(len(report.item_fill_rates), 1)
+        self.assertEqual((report.item_fill_rates[0].filled, report.item_fill_rates[0].total), (1, 2))
+
+    def test_vitals_are_found_by_immutable_id_even_if_the_label_changed(self):
+        records = [
+            _record(
+                "2026-08-03",
+                items=[
+                    {
+                        "checklist_item_id": "生体情報の記録",  # ラベルから「バイタル」が消えている
+                        "checklist_item_key": "vital-signs",
+                        "value": "血圧128/78、体温36.5度",
+                        "filled": True,
+                    }
+                ],
+            )
+        ]
+        report = monthly.build(records, subject_pseudonym="PATIENT_x", year=2026, month=8)
+        self.assertEqual((report.vitals[0].systolic, report.vitals[0].diastolic), (128, 78))
+
     def test_evaluation_counts(self):
         records = [
             _record("2026-08-03", evaluation={"filled": True}),

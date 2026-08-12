@@ -58,7 +58,10 @@ CREATE TABLE IF NOT EXISTS impacts (
     row_id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
     change_row_id INTEGER NOT NULL REFERENCES changes(row_id),
+    -- ⚠️ sitedoc_item_id は**表示用のラベル**（可変）。同一性の判定に使わないこと。
+    --    突き合わせは sitedoc_item_key（不変ID・ledger R-88）で行う。
     sitedoc_item_id TEXT,
+    sitedoc_item_key TEXT,
     verdict TEXT NOT NULL,
     rationale TEXT NOT NULL,
     confidence REAL NOT NULL,
@@ -145,6 +148,13 @@ def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(cost_records)")}
     if "timeout" not in columns:
         conn.execute("ALTER TABLE cost_records ADD COLUMN timeout INTEGER NOT NULL DEFAULT 0")
+    # ledger R-88: 既存DB（不変IDを持たない旧スキーマ）へ列を追加する。既存行の
+    # sitedoc_item_key は NULL のままにする——過去の判定はラベルでしか記録されておらず、
+    # あとから正しい不変IDを推測することはできない。突き合わせ側がラベルへ
+    # フォールバックする（pipeline._lookup_item / checklist.apply_approved）。
+    impact_columns = {row[1] for row in conn.execute("PRAGMA table_info(impacts)")}
+    if "sitedoc_item_key" not in impact_columns:
+        conn.execute("ALTER TABLE impacts ADD COLUMN sitedoc_item_key TEXT")
     conn.commit()
     return conn
 
@@ -227,14 +237,15 @@ def save_pipeline_result(conn: sqlite3.Connection, run_id: str, result: dict[str
         cursor = conn.execute(
             """
             INSERT INTO impacts
-                (run_id, change_row_id, sitedoc_item_id, verdict, rationale, confidence,
-                 evidence_path, evidence_quote, evidence_offset)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (run_id, change_row_id, sitedoc_item_id, sitedoc_item_key, verdict, rationale,
+                 confidence, evidence_path, evidence_quote, evidence_offset)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
                 change_row_id_by_label[impact.change_id],
                 impact.sitedoc_item_id,
+                impact.sitedoc_item_key,
                 impact.verdict,
                 impact.rationale,
                 impact.confidence,
@@ -265,7 +276,8 @@ def save_pipeline_result(conn: sqlite3.Connection, run_id: str, result: dict[str
 _PROPOSAL_REVIEW_QUERY = """
 SELECT
     proposals.row_id, proposals.before, proposals.after, proposals.status,
-    impacts.sitedoc_item_id, impacts.verdict, impacts.rationale, impacts.confidence,
+    impacts.sitedoc_item_id, impacts.sitedoc_item_key,
+    impacts.verdict, impacts.rationale, impacts.confidence,
     impacts.evidence_path, impacts.evidence_quote, impacts.evidence_offset,
     changes.label, changes.kind, changes.summary,
     changes.old_path, changes.old_text, changes.new_path, changes.new_text
@@ -282,6 +294,7 @@ _PROPOSAL_COLUMNS = (
     "after",
     "status",
     "sitedoc_item_id",
+    "sitedoc_item_key",
     "verdict",
     "rationale",
     "confidence",
@@ -317,11 +330,15 @@ def get_proposal_for_review(conn: sqlite3.Connection, proposal_row_id: int) -> d
 
 
 def list_reviewed_precedents_for_item(
-    conn: sqlite3.Connection, item_label: str, *, limit: int = 3
+    conn: sqlite3.Connection, item_key: str, *, limit: int = 3
 ) -> list[dict[str, Any]]:
     """design.md §6.7(b)・ledger N-8: 同じチェックリスト項目について過去に人間がレビュー済みの
-    判断を、新しい突合判定への弱い参考情報として返す。`sitedoc_item_id`をタグとして扱う
+    判断を、新しい突合判定への弱い参考情報として返す
     （新しいベクトルDB等は使わず、既存のimpacts/proposalsをそのまま再利用する）。
+
+    ledger R-88: 突き合わせは不変ID（`sitedoc_item_key`）で行う。ラベルで引くと、
+    更新案が承認されて文言が変わった瞬間に過去の判断を見失う。ただし不変ID導入前に
+    記録された行は key が NULL なので、ラベル一致も併せて拾う（移行期間の互換）。
 
     `未承認`（人間がまだ見ていない）は判断とみなさないため除外する。
     """
@@ -331,11 +348,13 @@ def list_reviewed_precedents_for_item(
         FROM proposals
         JOIN impacts ON impacts.row_id = proposals.impact_row_id
         JOIN changes ON changes.row_id = impacts.change_row_id
-        WHERE impacts.sitedoc_item_id = ? AND proposals.status != '未承認'
+        WHERE (impacts.sitedoc_item_key = ?
+               OR (impacts.sitedoc_item_key IS NULL AND impacts.sitedoc_item_id = ?))
+          AND proposals.status != '未承認'
         ORDER BY proposals.row_id DESC
         LIMIT ?
         """,
-        (item_label, limit),
+        (item_key, item_key, limit),
     ).fetchall()
     return [{"status": row[0], "change_summary": row[1]} for row in rows]
 

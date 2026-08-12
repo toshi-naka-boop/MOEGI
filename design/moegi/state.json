@@ -4,8 +4,15 @@
   "designVersion": "v13",
   "criticRound": 3,
   "approvedAt": "2026-08-08",
-  "openIssueIds": ["N-4", "R-56", "script-rework", "checklist-item-identity"],
-  "requiredReads": ["design.md", "ledger.md"],
+  "openIssueIds": [
+    "N-4",
+    "R-56",
+    "script-rework"
+  ],
+  "requiredReads": [
+    "design.md",
+    "ledger.md"
+  ],
   "quickOverview": "overview.md（design.mdを可視化した要約。全体像・詰まり所を先に把握したい時に読む）",
   "progress": {
     "D0": "完了（規約照会・問題なし → R-53で論点消滅）",
@@ -20,14 +27,16 @@
     "D5-followup2": "✅完了（2026-08-11〜12・ユーザーレビューを受けた4件の追加対応）。①承認UIのUX修正2件（ホームリンク・過去実行の表示、R-78）。②ORCA3段フォールバック実装——ORCAが実はAnthropic/Gemini/Qwen等のマルチプロバイダルーターだと実測で判明（R-64解消）。「主モデル→orcarouter/auto→ローカル」に拡張し、②③-a③-b④のローカル最終フォールバックもTanuki 7B→gemma4:26bに切替（R-79）。実機で3段フォールバックの実動作を確認済み。③モバイル音声入力UI＋処置ボタンをMOEGI本体（/nippou）に実装（R-80）——MediaRecorder APIでの録音→.webmアップロード→faster-whisper文字起こし、処置内容はCSS `:has()`のピルボタンで多重選択しLLMを経由せず格納。実音声ファイルでのアップロード完走を確認済み（マイク録音自体は実機スマホでの確認が別途必要）",
     "N-8-partial": "✅(a)(b)実装完了・採用（2026-08-12深夜・/design-loop・design-critic opus + codex批評round-4を経て）。単発モードの突合プロンプトに兄弟項目ラベル＋過去承認履歴（弱い参考情報）を追加。当初案にあった(c)チェックリスト接続点は批評で重大な設計欠陥（`sitedoc_item_id`が可変な自然キーであることに起因）が判明し実装せず、朝の判断タスクへ差し戻し",
     "N-8-eval-loop": "✅完了（2026-08-12深夜〜早朝・ユーザー新規作成の`/eval-loop`スキルを初適用）。プロンプト文面をクロスベンダー批評（design-critic opus + codex）→改訂→`eval/`一式（goldset48セルをJSONL化・本番コードをそのまま呼ぶハーネス）で3巡評価。35/48(72.9%)→43/48(89.6%)→45/48(93.8%)まで改善しユーザー承認（『90%超えたらOK』）。`orchestrate=True`をwebapp.py・cli.pyの本番呼び出しへ配線（従来はデフォルトFalseで未使用だった）。残り3セル（誤検出2・見逃し1）は通達原文精読の結果ゴールドセットは妥当と判断し、③-a要件抽出の要約精度に起因する可能性がある既知の限界として記録。テスト計13件追加・全126件green",
-    "mobile-https": "✅コード側は完了（R-82）。mkcertでlocalhost・127.0.0.1・MacのLAN IP（192.168.0.104）向けのローカル証明書を発行し、uvicornを--ssl-keyfile/--ssl-certfileでHTTPS化（--host 0.0.0.0で外部到達可）。https://192.168.0.104:8420/ で200を確認。証明書一式（certs/）は秘密鍵を含むため.gitignore対象・リポジトリには含めない。rootCA.pemはユーザーへ送付済み。**残作業はユーザー側の手動操作**（下記carryOverToD6参照）"
+    "mobile-https": "✅コード側は完了（R-82）。mkcertでlocalhost・127.0.0.1・MacのLAN IP（192.168.0.104）向けのローカル証明書を発行し、uvicornを--ssl-keyfile/--ssl-certfileでHTTPS化（--host 0.0.0.0で外部到達可）。https://192.168.0.104:8420/ で200を確認。証明書一式（certs/）は秘密鍵を含むため.gitignore対象・リポジトリには含めない。rootCA.pemはユーザーへ送付済み。**残作業はユーザー側の手動操作**（下記carryOverToD6参照）",
+    "security-layer": "✅完了（2026-08-12）。仮名化・Privacy Gate（ルール→辞書→ローカルLLM→独立再検査→fail-closed）、仮名対応表のAES-256-GCM保管、ログサニタイザー、監査記録。SOAP構造化を追加。実機実測で7Bモデルの本文まるごと差し替えを発見しclinical_numbers_droppedガードを追加（R-86）。仕様は design/moegi/privacy.md",
+    "monthly-report": "✅完了（2026-08-12）。日報の永続化＋月報の決定論的集計（LLM不使用）。利用者コードは選択式、仮名は鍵つきHMACで導出（R-84/R-85）。項目の不変IDを導入し、ラベル変更をまたいでも月報が二重計上しないことをE2E確認（R-88）",
+    "g6-before-after": "✅完了（2026-08-12）。同一発話×変更前後チェックリストの比較画面。Privacy Gateを迂回しない"
   },
   "nextAction": "【最優先・要ユーザー判断】Mac mini電源問題（R-83）——会場に確保できる見込みか回答待ち。確保できないとD6以前にG3オフライン完走・日報ローカル処理のデモ自体が実演不可能になる。並行して、mkcertのCA登録（Mac本体への`mkcert -install`・実演端末へのrootCA.pemインストール）を実施。両方片付いたら朝の判断タスク（下記carryOverToD6・checklist-item-identity）→D6（LINEキュー型チャネル・G6接続点・§7台本#6の作り直し）へ",
   "commitPolicy": "D区切りごとにコミットする（feat: D1 / feat: D2 ...）。バグ修正はfix:で分離。ユーザー決定 2026-08-09",
   "carryOverToD6": {
     "script-rework": "§7台本#6を実ワークフロー（現場録音→事務所バッチ処理）に合わせて作り直す。design.md §7に2026-08-12深夜のドラフト案あり（要レビュー・🔧マーク）。R-83の電源問題次第で「バックアップ動画が主手段」に前提が変わる可能性あり",
     "line-queue": "LINEキュー型チャネル（store-and-forward・送信待ちバッジ・復帰時自動フラッシュ）は未実装。外部サービス連携のため実装前にユーザー承認が必要",
-    "g6-ui": "Before/After比較画面・発話カードのUI（design.md D6行）は未実装",
     "mobile-nippou-real-device-check": "R-80/R-81の録音UIは実機スマホ・タブレットのマイク許可フロー・タッチ操作で未確認（ヘッドレスブラウザ・Simulator両方とも検証不可だった）",
     "n8-remaining-3-cells": "eval-loopで45/48(93.8%)まで改善後に残る3セル（e/訪問日数頻度・g_a/時間の記録＝誤検出2件、g_i/訪問日数頻度＝見逃し1件）。原因は③-a要件抽出（requirement_text）の要約が「計画」と「記録」の区別・合算ルールの含意を落としている可能性。根本対応には③-aプロンプトの改善が必要かもしれない",
     "mobile-nippou-ca-install": "R-82: mkcertのCA登録が未完了。①ユーザーのターミナルで`mkcert -install`（Mac自身の信頼登録・パスワード必要） ②実演端末（iOS/Android）へrootCA.pemを転送し信頼登録（iOSは「証明書信頼設定」で完全信頼が別途必要）。完了後 https://192.168.0.104:8420/nippou で警告なしにマイクが使えるはず",
@@ -36,12 +45,13 @@
   "blockedOn": {
     "mac-mini-power": "【最重要】R-83: 会場のMac mini用電源が未確保。バッテリー非搭載のため無給電では起動不可。代替PC（会社PC）はgemma4:26bローカル実行に非力。ポータブル電源（256Wh級・実売1.5-2万円・Anker 521等）で5-6時間駆動を試算済み、購入・携行できるか回答待ち。確保できない場合はD8の「バックアップ動画」を主要デモ手段へ格上げする方針転換が必要",
     "xcode-full-install": "R-81のiOS動作確認にはiOS Simulatorが必要だが、このMacはXcodeコマンドラインツールのみでフルインストールされていない。Mac App StoreからXcodeを入れ、`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`（ユーザーのパスワードが必要なため代行不可）を実行後に再確認できる",
-    "N-4": "厚労省「説明資料」PDFがリポジトリに存在しないため原文確認が今夜は不可能だった。ユーザーが原本を持っているか確認が必要",
-    "checklist-item-identity": "2026-08-12深夜の批評round-4で判明: ChecklistItemの識別子は項目ラベル文字列そのもの（可変な自然キー）。『承認済みチェックリストを日報エージェントへ反映する』(c)機能を作るには、項目に不変IDを持たせる設計変更が必要（sitedoc_sample.toml・goldset.toml・store.pyのimpacts.sitedoc_item_idを含む複数ファイルに波及）。実装するかどうか・するとしたらどの範囲まで変更を許容するかはユーザー判断が必要（詳細: reviews/round-4-opus.md, ledger N-8「2026-08-12深夜」の項）"
+    "N-4": "厚労省「説明資料」PDFがリポジトリに存在しないため原文確認が今夜は不可能だった。ユーザーが原本を持っているか確認が必要"
   },
   "futureNippouAppNotes": {
     "procedures-button-ui": "R-77（2026-08-11）→R-80（2026-08-11〜12）で実装済み: 処置内容はLLM自由記述に任せず、ボタン選択式（複数選択可）の固定語彙UIにした（LLMの表記揺れ・誤認識リスクを避けるため）。当初は別途つくる予定の日報録音アプリ向けの設計メモだったが、ユーザー希望でMOEGI本体（/nippou）にプロトタイプとして実装。独立した本格的なモバイルアプリを別途作るかどうかは未定"
   },
-  "delegation": { "批評round-4": "design-critic opus + codex/gpt-5.6-sol xhigh" },
-  "lastUpdated": "2026-08-12（新チャットへの引き継ぎ直前に更新）"
+  "delegation": {
+    "批評round-4": "design-critic opus + codex/gpt-5.6-sol xhigh"
+  },
+  "lastUpdated": "2026-08-12（セキュリティ層・月報・G6比較画面・不変ID導入まで反映）"
 }

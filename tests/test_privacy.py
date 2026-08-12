@@ -944,17 +944,31 @@ class SoapStructuringTest(unittest.TestCase):
 class ExistingBehaviourRegressionTest(unittest.TestCase):
     """§13 回帰テスト: 既存の日報構造化の契約が変わっていないこと。"""
 
-    def test_nippou_record_schema_is_unchanged(self):
+    def test_nippou_record_schema_is_backward_compatible(self):
+        """既存フィールドが消えず順序も変わらないこと、追加分は既定値を持つこと。
+
+        完全一致で固定すると、後方互換な追加（ledger R-88 の checklist_item_key など）
+        まで落ちてしまい、テストが「壊れていないのに赤くなる」側に倒れる。
+        守りたいのは「既存の呼び出し側が壊れないこと」なので、そちらを検査する。
+        """
         import dataclasses
 
-        self.assertEqual(
-            [f.name for f in dataclasses.fields(nippou.NippouRecord)],
-            ["checklist_version", "utterance_id", "items", "evaluation", "procedures"],
-        )
-        self.assertEqual(
-            [f.name for f in dataclasses.fields(nippou.NippouItem)],
-            ["checklist_item_id", "value", "filled"],
-        )
+        for cls, original in (
+            (
+                nippou.NippouRecord,
+                ["checklist_version", "utterance_id", "items", "evaluation", "procedures"],
+            ),
+            (nippou.NippouItem, ["checklist_item_id", "value", "filled"]),
+        ):
+            with self.subTest(cls=cls.__name__):
+                names = [f.name for f in dataclasses.fields(cls)]
+                self.assertEqual(names[: len(original)], original)
+                for field in dataclasses.fields(cls)[len(original) :]:
+                    has_default = (
+                        field.default is not dataclasses.MISSING
+                        or field.default_factory is not dataclasses.MISSING
+                    )
+                    self.assertTrue(has_default, f"{cls.__name__}.{field.name} に既定値がありません")
 
     def test_structure_still_works_after_the_gate(self):
         adapter = _FakeAdapter(

@@ -45,13 +45,26 @@ DEFAULT_SITEDOC_PATH = _REPO_ROOT / "config" / "sitedoc_sample.toml"
 
 @dataclass
 class ChecklistItem:
-    """項目（design.md §6.4 ChecklistItem）。"""
+    """項目（design.md §6.4 ChecklistItem）。
+
+    ledger R-88: `item_id` は**不変の識別子**、`label` は現場に表示する**可変の文言**。
+    更新案が承認されると label は書き換わるので、同一性の判定に label を使ってはいけない。
+    突き合わせには必ず `key` を使うこと。
+    """
 
     sitedoc_id: str
     label: str
     kind: str  # "自由記述" | "選択" | "評価"
     goal_ref: str | None = None
     required: bool = True
+    #: sitedoc の `id`。空の場合は label へフォールバックする（`id` を持たない
+    #: 旧い設定・テストのダブルとの互換のため。新しい設定では必ず付けること）。
+    item_id: str = ""
+
+    @property
+    def key(self) -> str:
+        """同一性の判定に使う識別子。label は表示専用で、ここには使わない。"""
+        return self.item_id or self.label
 
 
 @dataclass
@@ -98,11 +111,17 @@ class Impact:
 
     id: str
     change_id: str
-    sitedoc_item_id: str | None  # None = 既存項目に該当なし（新規項目の提案）
+    #: ⚠️ 対象項目の**表示用ラベル**（可変）。更新案が承認されると書き換わるので、
+    #: 同一性の判定にこれを使わないこと（ledger R-88）。突き合わせは sitedoc_item_key。
+    #: None = 既存項目に該当なし（新規項目の提案）
+    sitedoc_item_id: str | None
     verdict: str  # "要更新" | "影響なし"
     rationale: str
     confidence: float
     evidence: list[Evidence] = field(default_factory=list)
+    #: 対象項目の**不変ID**（ChecklistItem.key）。None = 新規項目の提案。
+    #: 過去の判定・日報・月報との突き合わせは必ずこちらで行う（ledger R-88）。
+    sitedoc_item_key: str | None = None
 
 
 @dataclass
@@ -132,6 +151,8 @@ def load_sitedoc(path: str | Path = DEFAULT_SITEDOC_PATH) -> SiteDoc:
             kind=item["kind"],
             goal_ref=item.get("goal_ref"),
             required=item.get("required", True),
+            # ledger R-88: 項目の不変ID。無い場合は label がキーになる（旧い設定との互換）
+            item_id=item.get("id", ""),
         )
         for item in data.get("items", [])
     ]
@@ -642,12 +663,15 @@ def _forced_new_item_impact(
     )
 
 
-def _undecidable_impact(change: Change, item_label: str | None, reason: str) -> Impact:
+def _undecidable_impact(
+    change: Change, item_label: str | None, reason: str, item_key: str | None = None
+) -> Impact:
     """design.md §6.6（v10）: 判定できなかった項目を黙って捨てず「判定不能」として残す。"""
     return Impact(
-        id=f"impact-{change.id}-{item_label or 'new'}",
+        id=f"impact-{change.id}-{item_key or item_label or 'new'}",
         change_id=change.id,
         sitedoc_item_id=item_label,
+        sitedoc_item_key=item_key,
         verdict="判定不能",
         rationale=reason,
         confidence=0.0,
@@ -694,7 +718,9 @@ def match_requirements(
         for item in sitedoc.items:
             precedents_block = ""
             if store_conn is not None:
-                precedents = store.list_reviewed_precedents_for_item(store_conn, item.label)
+                # ledger R-88: 過去の判断の突き合わせは不変IDで行う。ラベルで引くと、
+                # 更新案が承認されて文言が変わった瞬間に過去の判断を見失う。
+                precedents = store.list_reviewed_precedents_for_item(store_conn, item.key)
                 precedents_block = _format_precedents_block(precedents)
             prompt = _MATCH_ITEM_PROMPT.format(
                 item_label=item.label,
@@ -713,7 +739,9 @@ def match_requirements(
                 # （evidenceが無いので承認UI上の更新案は作られないが、Impactとして
                 # 「判定不能」がJSON出力・画面に残る＝黙って捨てない）。
                 impacts.append(
-                    _undecidable_impact(change, item.label, "ローカルLLM呼び出しがタイムアウトしました")
+                    _undecidable_impact(
+                        change, item.label, "ローカルLLM呼び出しがタイムアウトしました", item.key
+                    )
                 )
                 continue
 
@@ -727,9 +755,10 @@ def match_requirements(
 
             candidates.append(
                 Impact(
-                    id=f"impact-{change.id}-{item.label}",
+                    id=f"impact-{change.id}-{item.key}",
                     change_id=change.id,
                     sitedoc_item_id=item.label,
+                    sitedoc_item_key=item.key,
                     verdict="要更新",
                     rationale=str(entry.get("rationale", "")),
                     confidence=float(entry.get("confidence") or 0.0),
@@ -870,7 +899,9 @@ def _match_requirements_batched(
             # 一括呼び出しのtimeoutは全項目が巻き添えになる（単発モードには無い失敗の形）。
             # 黙って消さず、全項目を判定不能として残す。
             impacts.extend(
-                _undecidable_impact(change, item.label, "一括判定の呼び出しがタイムアウトしました")
+                _undecidable_impact(
+                    change, item.label, "一括判定の呼び出しがタイムアウトしました", item.key
+                )
                 for item in sitedoc.items
             )
             # 新規項目の提案は条文の種別だけで決まる（LLMの応答を必要としない）ので、
@@ -892,7 +923,9 @@ def _match_requirements_batched(
                 # 承認条件1: 判定が返らなかった項目は「判定不能」。黙って影響なし扱いにしない
                 # （一括プロンプトの判定漏れをここで検知できるようにするため）。
                 impacts.append(
-                    _undecidable_impact(change, item.label, "一括判定でこの項目の判定が返りませんでした")
+                    _undecidable_impact(
+                        change, item.label, "一括判定でこの項目の判定が返りませんでした", item.key
+                    )
                 )
                 continue
             if entry.get("verdict") != "要更新":
@@ -903,9 +936,10 @@ def _match_requirements_batched(
             matched_existing = True
             impacts.append(
                 Impact(
-                    id=f"impact-{change.id}-{item.label}",
+                    id=f"impact-{change.id}-{item.key}",
                     change_id=change.id,
                     sitedoc_item_id=item.label,
+                    sitedoc_item_key=item.key,
                     verdict="要更新",
                     rationale=str(entry.get("rationale", "")),
                     confidence=float(entry.get("confidence") or 0.0),
@@ -948,6 +982,28 @@ def _match_requirements_batched(
 # ④更新案生成（ローカル固定・事業所文書を含む）
 # ---------------------------------------------------------------------------
 
+def _items_by_key(sitedoc: SiteDoc) -> dict[str, ChecklistItem]:
+    """不変ID→項目。ラベルからも引けるようにしておく（ledger R-88の移行期間用）。"""
+    lookup: dict[str, ChecklistItem] = {}
+    for item in sitedoc.items:
+        lookup[item.key] = item
+        lookup.setdefault(item.label, item)  # 不変IDを持たない旧データ経由の参照
+    return lookup
+
+
+def _lookup_item(lookup: dict[str, ChecklistItem], impact: Impact) -> ChecklistItem | None:
+    """Impactが指すチェックリスト項目を引く。
+
+    不変ID優先、見つからなければラベルで引く（ledger R-88の移行期間）。
+    どちらでも見つからなければ None——新規項目の提案か、既にラベルが書き換わって
+    追跡できなくなった項目。呼び出し側は「チェックリストに存在しない」として扱う。
+    """
+    for candidate in (impact.sitedoc_item_key, impact.sitedoc_item_id):
+        if candidate is not None and candidate in lookup:
+            return lookup[candidate]
+    return None
+
+
 _DRAFT_PROMPT = """あなたは訪問看護事業所の現場文書担当者です。以下の内容をもとに、
 チェックリストへの更新案（更新後の項目文言）を作成してください。
 
@@ -968,18 +1024,19 @@ def draft_proposals(
     impacts: list[Impact], sitedoc: SiteDoc, adapter: LLMAdapter, *, run_id: str, store_conn=None
 ) -> list[Proposal]:
     """④更新案生成（design.md §6.1）。事業所文書が入るためローカル固定。"""
-    items_by_label = {item.label: item for item in sitedoc.items}
+    items_by_key = _items_by_key(sitedoc)
     proposals: list[Proposal] = []
 
     for impact in impacts:
         if impact.verdict != "要更新" or not impact.evidence:
             continue  # design.md §6.4: evidence必須。空なら提案を作らない
 
-        if impact.sitedoc_item_id is None:
+        item = _lookup_item(items_by_key, impact)
+        if item is None:
             before = ""
             before_display = "(現在この項目はチェックリストに存在しない)"
         else:
-            before = items_by_label[impact.sitedoc_item_id].label
+            before = item.label
             before_display = before
 
         quote = impact.evidence[0].quote
@@ -1027,7 +1084,7 @@ def _draft_proposals_batched(
     変更（change_id）ごとにまとめる。1回のプロンプトに複数の通達変更を混ぜると、
     別の変更の根拠を引いた文言が出やすくなるため。
     """
-    items_by_label = {item.label: item for item in sitedoc.items}
+    items_by_key = _items_by_key(sitedoc)
     eligible = [i for i in impacts if i.verdict == "要更新" and i.evidence]
     proposals: list[Proposal] = []
 
@@ -1039,7 +1096,7 @@ def _draft_proposals_batched(
     for change_id in change_ids:
         group = [i for i in eligible if i.change_id == change_id]
         befores = [
-            "" if i.sitedoc_item_id is None else items_by_label[i.sitedoc_item_id].label for i in group
+            (lambda item: item.label if item else "")(_lookup_item(items_by_key, i)) for i in group
         ]
         targets_block = "\n\n".join(
             f"{index}. 対象項目の現状: {before or '(現在この項目はチェックリストに存在しない)'}\n"

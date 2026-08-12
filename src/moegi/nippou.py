@@ -51,11 +51,16 @@ _AUDIO_SUFFIXES = frozenset({".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"})
 
 @dataclass
 class NippouItem:
-    """日報の1項目（design.md §6.4 NippouRecord.items の要素）。"""
+    """日報の1項目（design.md §6.4 NippouRecord.items の要素）。
+
+    ledger R-88: `checklist_item_id` は**表示用のラベル**（可変）。月報の集計など
+    同一性が要る場面では `checklist_item_key`（不変ID）を使うこと。
+    """
 
     checklist_item_id: str
     value: str
     filled: bool
+    checklist_item_key: str = ""
 
 
 @dataclass
@@ -267,7 +272,9 @@ class NippouAgent:
             # design.md §6.6（v10）の完走優先方針をnippouにも適用: 例外を上げず、
             # 全項目「未記入」として記録を返す（黙って落とさない）。
             items = [
-                NippouItem(checklist_item_id=item.label, value="", filled=False)
+                NippouItem(
+                    checklist_item_id=item.label, value="", filled=False, checklist_item_key=item.key
+                )
                 for item in self._checklist
             ]
             evaluation = self._build_evaluation(goal_item, None) if goal_item else None
@@ -290,13 +297,21 @@ class NippouAgent:
         for index, item in enumerate(self._checklist, start=1):
             entry = entries_by_id.get(str(index))
             if entry is None:
-                items.append(NippouItem(checklist_item_id=item.label, value="", filled=False))
+                items.append(
+                    NippouItem(
+                        checklist_item_id=item.label,
+                        value="",
+                        filled=False,
+                        checklist_item_key=item.key,
+                    )
+                )
             else:
                 items.append(
                     NippouItem(
                         checklist_item_id=item.label,
                         value=str(entry.get("value") or ""),
                         filled=bool(entry.get("filled")),
+                        checklist_item_key=item.key,
                     )
                 )
 
