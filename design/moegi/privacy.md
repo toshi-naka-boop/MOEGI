@@ -27,6 +27,11 @@ flowchart TD
     F -->|passed| G["既存処理（無変更）<br/>nippou.structure() → 日報<br/>nippou.structure_soap() → SOAP"]
     F -->|review_required / blocked / failed| H["処理停止・人による確認<br/>修正して再検査（/nippou/recheck）"]
 
+    G --> REC[("日報レコード<br/>nippou_records<br/>仮名化済みの構造化結果のみ")]
+    REC --> M["月報（monthly.py）<br/>決定論的な集計・LLM不使用"]
+    CODE["利用者コード（選択式）"] -.->|鍵つきHMAC| SUB["安定仮名 PATIENT_xxxxxxxx"]
+    SUB -.-> REC
+
     C -.->|仮名 → 実名| V[("仮名対応表<br/>data/privacy_vault.db<br/>AES-256-GCM暗号化")]
     F -.->|種別と件数のみ| AU[("監査記録<br/>privacy_audits<br/>本文なし")]
 
@@ -35,7 +40,7 @@ flowchart TD
     classDef new fill:#d4edda,stroke:#2e7d32,color:#1a1a1a
     classDef blocked fill:#fbf1e2,stroke:#a8641b,color:#1a1a1a
     classDef future fill:#f5f5f5,stroke:#999,color:#666,stroke-dasharray: 4 3
-    class B,C,D,E,F,V,AU new
+    class B,C,D,E,F,V,AU,REC,M,CODE,SUB new
     class H blocked
     class X future
 ```
@@ -160,6 +165,46 @@ type PrivacyGateStatus = "pending" | "passed" | "review_required" | "blocked" | 
 - **バックアップ**: DBファイル単位で暗号化されているため、ファイルをコピーしても平文は出ない。
   ただし**鍵ファイルを同じ場所にバックアップすると保護が無効になる**——鍵とDBを別の保管先に置くこと。
 
+## 6-b. 日報レコードと安定仮名（月報のための保存・ledger R-84/R-85）
+
+月報（1ヶ月分の日報の集約）には「同じ人の記録をまとめる鍵」が要る。しかし Privacy Gate が
+採番する `PATIENT_001` は1リクエスト内でしか一貫しないため、別に安定した鍵を用意した。
+
+- **利用者コードはUIで選択式**（`config/pseudonym_dictionary_sample.toml` の `code`）。
+  処置ボタン（ledger R-77）と同じ「LLMに任せず決定的なUIに倒す」流儀で、
+  **LLMに患者の同定をさせない**。
+- **安定仮名** = `vault.stable_pseudonym(code)` = `PATIENT_` + HMAC-SHA256(鍵, "PATIENT:"+code) の先頭12桁。
+  鍵つきなので、鍵を持たない者はコードから仮名を作れず、仮名からコードも逆算できない
+  （利用者コードは桁数が少なく、素のSHA256だと総当たりで逆引きできてしまう）。
+  **鍵が変わると過去の日報と結びつかなくなる**ので、鍵ファイルは対応表DBと同じ重みで保全すること。
+
+### `nippou_records` に保存するもの／しないもの
+
+| 保存する | 保存しない |
+|---|---|
+| 安定仮名（`subject_pseudonym`） | **利用者コードそのもの** |
+| 訪問日・Privacy Gate状態・ポリシーバージョン | **文字起こし原文**（列が存在しない） |
+| 仮名化済みの構造化結果（items / evaluation / SOAP） | **音声データ** |
+| 処置内容（人が選んだ確定値） | **仮名対応表**（別DB） |
+
+- **Privacy Gate が不合格なら、構造化も保存も行わない**（`_structure_and_render` の同じ分岐で止まる）。
+- 利用者コードが選ばれていない場合は保存しない。「誰の記録か分からない日報」を入れると
+  月報の集計が静かに狂うため、保存しなかったことを画面に出す。
+- 月報画面（`/monthly`）は **GETではなくPOST** で条件を受ける。利用者コードをURLのクエリ文字列に
+  載せると、ブラウザ履歴・アクセスログ・Referer に識別子が残るため。
+
+### 月報がLLMを使わない理由
+
+1. 月報は加算のエビデンスにも使われ得るため、**数字が実行のたびに揺れてはいけない**
+2. LLM要約は要配慮個人情報の**集積**を1回のプロンプトに載せることになり、
+   ローカル固定でも露出面が増える
+
+集計内容は訪問回数・訪問日数・処置別回数・チェックリスト項目の記入率・評価の記入状況・
+バイタルの推移。バイタルは**バイタル項目とSOAPのO欄からのみ**抽出し（訪問時刻
+「10:30/11:00」を血圧と誤読しないため）、収縮期 > 拡張期 の妥当性も確認する。
+**読み取れなかった訪問は0として混ぜず件数として残す**——月報の数字が実態より
+良くも悪くも見えるのを避けるため。
+
 ## 7. ログへ出さない情報
 
 **出さない**: 文字起こし原文／仮名化済み文章全文／日報・SOAP全文／実名／電話番号／詳細住所／
@@ -225,8 +270,12 @@ Privacy Gate状態／検出した情報種別と件数／ポリシーバージ�
    処理中はディスク上に平文で存在する。
 7. **鍵ファイルの保護はOSのファイルパーミッションのみ。** ディスク暗号化（FileVault等）と
    組み合わせる前提。HSM・キーチェーン連携は未実装。
-8. **仮名の一貫性は1リクエスト内のみ。** 同じ患者でも訪問ごとに `PATIENT_001` が別人を指し得る。
-   記録の横断分析には使えない（不変IDの設計は overview.md の未解決課題 #1 と同じ論点）。
+8. **本文中の仮名の一貫性は1リクエスト内のみ。** 同じ患者でも訪問ごとに `PATIENT_001` が
+   別人を指し得る。月報の集計は §6-b の**安定仮名**（利用者コード由来）で行うので影響しないが、
+   **日報の本文どうしを横断して読む用途には使えない**。
+9. **日報レコードそのものは要配慮個人情報。** 仮名化済みでも看護記録の本体（病状・服薬・処置）は
+   残る。DBファイルの保護はディスク暗号化とファイルパーミッションに依存しており、
+   認証・認可が無い現状ではアプリに到達できる者は月報を閲覧できる（上記 4 と同じ論点）。
 
 ## 11. 関連ファイル
 
@@ -241,5 +290,7 @@ Privacy Gate状態／検出した情報種別と件数／ポリシーバージ�
 | `src/moegi/privacy/gate.py` | 状態機械・fail-closed・外部送信境界 |
 | `src/moegi/privacy/logsafe.py` | ログサニタイザー・監査フィールド許可リスト |
 | `config/privacy.toml` | ポリシーバージョン・モード・閾値 |
-| `config/pseudonym_dictionary_sample.toml` | 合成辞書（実運用では差し替え） |
-| `tests/test_privacy.py` | 上記すべてのテスト（合成データのみ） |
+| `config/pseudonym_dictionary_sample.toml` | 合成辞書（実運用では差し替え）。利用者コードもここ |
+| `src/moegi/monthly.py` | 月報の決定論的な集計（LLM不使用・ledger R-84） |
+| `tests/test_privacy.py` | 仮名化・Privacy Gate のテスト（合成データのみ） |
+| `tests/test_monthly.py` | 日報の永続化・安定仮名・月報のテスト（合成データのみ） |

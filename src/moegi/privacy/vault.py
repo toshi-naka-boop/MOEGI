@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -89,6 +91,28 @@ def _load_or_create_key(key_path: Path = DEFAULT_KEY_PATH) -> bytes:
     finally:
         os.close(fd)
     return key
+
+
+def stable_pseudonym(
+    code: str, *, prefix: str = "PATIENT", key_path: Path = DEFAULT_KEY_PATH
+) -> str:
+    """事業所内の利用者コードから、日をまたいで安定した仮名を導出する。
+
+    月報（1ヶ月分の日報の集約）には「同じ人の記録をまとめる鍵」が要る。しかし
+    Privacy Gate が採番する `PATIENT_001` は1リクエスト内でしか一貫しないため、
+    別に安定した鍵が必要になる。
+
+    設計:
+      - 鍵つきHMAC-SHA256。鍵を持たない者はコードから仮名を作れないし、仮名から
+        コードを逆算することもできない（総当たりを鍵で塞ぐのが平文ハッシュとの違い。
+        利用者コードは桁数が少なく、素のSHA256だと総当たりで逆引きできてしまう）
+      - 同じコードからは常に同じ仮名が出る（決定論的＝月報の集計が再現できる）
+      - 鍵は仮名対応表と同じもの。**鍵が変わると過去の日報と結びつかなくなる**ので、
+        鍵ファイルは対応表DBと同じ重みで保全すること
+    """
+    key = _load_or_create_key(key_path)
+    digest = hmac.new(key, f"{prefix}:{code}".encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{prefix}_{digest[:12]}"
 
 
 def connect(db_path: str | Path = DEFAULT_VAULT_DB_PATH) -> sqlite3.Connection:

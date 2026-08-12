@@ -54,12 +54,14 @@ flowchart TD
         PGATE -->|仮名化済みテキスト| GEMMA["gemma4:26b<br/>backend: local(常時固定)<br/>日報 structure() / SOAP structure_soap()"]
         BTN["処置ボタン10項目(R-80)<br/>LLMを経由せず格納"] --> GEMMA
         PGATE -.->|仮名→実名| VAULT[("仮名対応表<br/>privacy_vault.db<br/>AES-256-GCM")]
+        GEMMA --> NREC[("日報レコード<br/>nippou_records<br/>安定仮名で保存(R-84)")]
+        NREC --> MONTH["月報 (monthly.py)<br/>決定論的な集計・LLM不使用"]
     end
     GEMMA -.->|"接続点1箇所(D6未着手)"| SITE
 
     classDef done fill:#d4edda,stroke:#2e7d32,color:#1a1a1a
     classDef pending fill:#f5f5f5,stroke:#999,color:#666,stroke-dasharray: 4 3
-    class OLD,NEW,SITE,INGEST,DIFF,REQ,MATCH,DRAFT,STORE,UI,ORCAFB,LOCALFB,FAX,MIC,GWS,GEMMA,BTN,nippou,PGATE,VAULT done
+    class OLD,NEW,SITE,INGEST,DIFF,REQ,MATCH,DRAFT,STORE,UI,ORCAFB,LOCALFB,FAX,MIC,GWS,GEMMA,BTN,nippou,PGATE,VAULT,NREC,MONTH done
     class LINE pending
 ```
 
@@ -80,6 +82,7 @@ flowchart TD
 | D5フォローアップ | G9バッジ削除(R-75)・FAX配信履歴(R-76)・UX修正2件(R-78)・ORCA3段フォールバック(R-79)・モバイル日報UI(R-80) | ✅ **完了（2026-08-12・ユーザーレビュー反映）** |
 | D5フォローアップ2 | N-8対策(a)(b)実装採用・オーケストレーションLLM実験実装（/design-loop・批評round-4） | ✅ **完了（2026-08-12深夜・ユーザー就寝中に自律実施）** |
 | セキュリティ層 | 仮名化・Privacy Gate（ルール／辞書／ローカルLLM／再検査／fail-closed／仮名対応表の暗号化保管／ログサニタイザー／監査記録）＋ SOAP構造化の追加 | ✅ **完了（2026-08-12）**。仕様は [privacy.md](./privacy.md) |
+| 月報 | 日報の永続化（安定仮名で保存）＋ 月報の決定論的な集計（LLM不使用）。R-15「月報はスコープ外」を条件付きで撤回 | ✅ **完了（2026-08-12）**。ledger R-84/R-85・[privacy.md §6-b](./privacy.md) |
 | D6 | LINEキュー型チャネル・G6周りのUI（処置ボタンは前倒し実装済み）・**§7台本#6を実ワークフローに合わせて作り直す**（ドラフト済み・要レビュー）・実機スマホでの録音UI確認・チェックリスト項目の不変ID設計（要判断） | ⬜ 未着手 |
 | D7 | オフライン本番通し・精度差実測・Before動画・台本確定 | ⬜ 未着手 |
 | D8 | 予備日・通しリハ | ⬜ 未着手 |

@@ -44,6 +44,7 @@ class Entry:
     surfaces: tuple[str, ...]
     surname: str | None = None
     relation: str | None = None  # 家族の続柄（"長女" 等）。あればこれを仮名に使う
+    code: str | None = None  # 事業所内の利用者コード（患者のみ）。日報の保存単位を決める
 
 
 @dataclass
@@ -101,6 +102,7 @@ def load_dictionary(path: str | Path) -> Dictionary:
                 canonical=str(raw.get("full_name", "")),
                 surfaces=_surfaces(raw, "full_name", "aliases", "patient_ids"),
                 surname=raw.get("surname"),
+                code=raw.get("code"),
             )
         )
     for raw in data.get("families", []):
@@ -297,6 +299,17 @@ def detect(text: str, dictionary: Dictionary, allocator: PseudonymAllocator) -> 
             _claim(match.start(), match.end())
 
     return sorted(detections, key=lambda d: d.start)
+
+
+def patient_codes(dictionary: Dictionary) -> list[str]:
+    """事業所内の利用者コードを一覧で返す（日報の保存単位・月報の集計単位の選択肢）。
+
+    実名は返さない。呼び出し側（承認UI）はこのコードだけを画面に出す——氏名の一覧を
+    画面に出す経路を作らないための制約で、実運用では認証つきの氏名表示に置き換わる想定
+    （design/moegi/privacy.md §10-4）。
+    """
+    codes = [e.code for e in dictionary.entries if e.category == "patient" and e.code]
+    return sorted(dict.fromkeys(codes))
 
 
 def contains_registered_name(text: str, dictionary: Dictionary) -> list[str]:

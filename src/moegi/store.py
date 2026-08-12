@@ -85,6 +85,28 @@ CREATE TABLE IF NOT EXISTS fax_deliveries (
     generated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 日報・SOAPの構造化結果（月報の集計材料）。
+-- ⚠️ 保存するのは **Privacy Gate を通過した仮名化済みの構造化結果だけ**。
+--    文字起こし原文・音声はここにも他のどこにも保存しない。
+-- ⚠️ 利用者コードそのものは保存しない。保存するのは鍵つきHMACで導出した安定仮名
+--    （vault.stable_pseudonym）だけなので、このテーブル単体からは利用者を逆引きできない。
+CREATE TABLE IF NOT EXISTS nippou_records (
+    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT NOT NULL,
+    subject_pseudonym TEXT NOT NULL,
+    visited_on TEXT NOT NULL,
+    gate_status TEXT NOT NULL,
+    checklist_version TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    items TEXT NOT NULL,
+    evaluation TEXT,
+    procedures TEXT NOT NULL,
+    soap TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nippou_records_subject_month
+    ON nippou_records(subject_pseudonym, visited_on);
+
 -- 仮名化処理の監査記録（design/moegi/privacy.md §10）。
 -- ⚠️ 本文（原文・仮名化済み全文・日報/SOAP全文）と仮名対応表はこのテーブルに入れない。
 --    detected_counts は「種別 → 件数」のJSONで、検出した値そのものは含まない。
@@ -368,6 +390,101 @@ def list_fax_deliveries(conn: sqlite3.Connection, run_id: str) -> list[dict[str,
         }
         for row in rows
     ]
+
+
+_NIPPOU_COLUMNS = (
+    "row_id",
+    "request_id",
+    "subject_pseudonym",
+    "visited_on",
+    "gate_status",
+    "checklist_version",
+    "policy_version",
+    "items",
+    "evaluation",
+    "procedures",
+    "soap",
+    "created_at",
+)
+
+
+def save_nippou_record(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    subject_pseudonym: str,
+    visited_on: str,
+    gate_status: str,
+    checklist_version: str,
+    policy_version: str,
+    items: list[dict[str, Any]],
+    procedures: list[str],
+    evaluation: dict[str, Any] | None = None,
+    soap: dict[str, Any] | None = None,
+) -> int:
+    """日報・SOAPの構造化結果を1件保存する（月報の集計材料）。
+
+    dataclassではなくdict/listで受けるのは、store.py が moegi.nippou を import すると
+    nippou → pipeline → store の循環になるため。呼び出し側が dataclasses.asdict() で
+    ほどいてから渡す。
+
+    ⚠️ 渡してよいのは Privacy Gate を通過した仮名化済みの構造化結果だけ。
+       文字起こし原文を渡す引数はこの関数に存在しない。
+    """
+    cursor = conn.execute(
+        """
+        INSERT INTO nippou_records
+            (request_id, subject_pseudonym, visited_on, gate_status, checklist_version,
+             policy_version, items, evaluation, procedures, soap)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            subject_pseudonym,
+            visited_on,
+            gate_status,
+            checklist_version,
+            policy_version,
+            json.dumps(items, ensure_ascii=False),
+            json.dumps(evaluation, ensure_ascii=False) if evaluation is not None else None,
+            json.dumps(procedures, ensure_ascii=False),
+            json.dumps(soap, ensure_ascii=False) if soap is not None else None,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def _nippou_row_to_dict(row: tuple) -> dict[str, Any]:
+    record = dict(zip(_NIPPOU_COLUMNS, row))
+    record["items"] = json.loads(record["items"])
+    record["procedures"] = json.loads(record["procedures"])
+    record["evaluation"] = json.loads(record["evaluation"]) if record["evaluation"] else None
+    record["soap"] = json.loads(record["soap"]) if record["soap"] else None
+    return record
+
+
+def list_nippou_records_for_month(
+    conn: sqlite3.Connection, *, subject_pseudonym: str, year: int, month: int
+) -> list[dict[str, Any]]:
+    """指定した利用者（安定仮名）の、指定年月の日報をすべて返す（訪問日の昇順）。"""
+    rows = conn.execute(
+        f"SELECT {', '.join(_NIPPOU_COLUMNS)} FROM nippou_records "  # noqa: S608 — 列名は定数
+        "WHERE subject_pseudonym = ? AND visited_on LIKE ? "
+        "ORDER BY visited_on, row_id",
+        (subject_pseudonym, f"{year:04d}-{month:02d}-%"),
+    ).fetchall()
+    return [_nippou_row_to_dict(row) for row in rows]
+
+
+def list_nippou_months(conn: sqlite3.Connection, subject_pseudonym: str) -> list[str]:
+    """その利用者の日報が存在する年月（"YYYY-MM"）を新しい順で返す。"""
+    rows = conn.execute(
+        "SELECT DISTINCT substr(visited_on, 1, 7) FROM nippou_records "
+        "WHERE subject_pseudonym = ? ORDER BY 1 DESC",
+        (subject_pseudonym,),
+    ).fetchall()
+    return [row[0] for row in rows]
 
 
 def save_privacy_audit(

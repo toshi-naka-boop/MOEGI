@@ -777,17 +777,25 @@ class DownstreamWiringTest(unittest.TestCase):
     def _failing_result(self) -> privacy.GateResult:
         return privacy.run_gate("被保険者証番号 12345678", config=_config(), today=_TODAY)
 
+    def _context(self, *, want_soap: bool = True, subject_code: str = "P-100234"):
+        return self.webapp._RecordContext(
+            procedures=[], want_soap=want_soap, subject_code=subject_code, visited_on="2026-08-12"
+        )
+
     def test_structure_is_not_called_when_gate_fails(self):
         result = self._failing_result()
         self.assertEqual(result.status, privacy.PrivacyGateStatus.BLOCKED)
         with (
             mock.patch.object(self.webapp, "_save_privacy_audit") as audit,
+            mock.patch.object(self.webapp, "_save_nippou_record") as save_record,
             mock.patch.object(self.webapp.nippou, "NippouAgent") as agent_cls,
             mock.patch.object(self.webapp.llm, "LLMAdapter") as adapter_cls,
         ):
-            response = self.webapp._structure_and_render(result, [], True)
+            response = self.webapp._structure_and_render(result, self._context())
         agent_cls.assert_not_called()
         adapter_cls.assert_not_called()
+        # 不合格の記録は月報の集計材料にもしない
+        save_record.assert_not_called()
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["proceeded"], False)
         self.assertEqual(response.status_code, 200)
@@ -796,10 +804,11 @@ class DownstreamWiringTest(unittest.TestCase):
         result = self._failing_result()
         with (
             mock.patch.object(self.webapp, "_save_privacy_audit"),
+            mock.patch.object(self.webapp, "_save_nippou_record"),
             mock.patch.object(self.webapp.nippou, "NippouAgent"),
             mock.patch.object(self.webapp.llm, "LLMAdapter"),
         ):
-            body = self.webapp._structure_and_render(result, [], True).body.decode()
+            body = self.webapp._structure_and_render(result, self._context()).body.decode()
         self.assertIn("/nippou/recheck", body)
         self.assertIn("セキュリティ検査で停止", body)
         self.assertNotIn("12345678", body)
@@ -809,6 +818,7 @@ class DownstreamWiringTest(unittest.TestCase):
         self.assertEqual(result.status, privacy.PrivacyGateStatus.PASSED)
         with (
             mock.patch.object(self.webapp, "_save_privacy_audit"),
+            mock.patch.object(self.webapp, "_save_nippou_record"),
             mock.patch.object(self.webapp.llm, "LLMAdapter"),
             mock.patch.object(self.webapp.nippou, "NippouAgent") as agent_cls,
         ):
@@ -817,7 +827,7 @@ class DownstreamWiringTest(unittest.TestCase):
                 checklist_version="v", utterance_id="u"
             )
             agent.structure_soap.return_value = nippou.SoapRecord(utterance_id="u")
-            self.webapp._structure_and_render(result, [], True)
+            self.webapp._structure_and_render(result, self._context())
         passed_text = agent.structure.call_args.args[0]
         self.assertIn("PATIENT_001", passed_text)
         self.assertNotIn("山田太郎", passed_text)
@@ -827,12 +837,13 @@ class DownstreamWiringTest(unittest.TestCase):
         result = privacy.run_gate("バイタル安定", config=_config(), today=_TODAY)
         with (
             mock.patch.object(self.webapp, "_save_privacy_audit"),
+            mock.patch.object(self.webapp, "_save_nippou_record"),
             mock.patch.object(self.webapp.llm, "LLMAdapter"),
             mock.patch.object(self.webapp.nippou, "NippouAgent") as agent_cls,
         ):
             agent = agent_cls.return_value
             agent.structure.return_value = nippou.NippouRecord(checklist_version="v", utterance_id="u")
-            self.webapp._structure_and_render(result, [], False)
+            self.webapp._structure_and_render(result, self._context(want_soap=False))
         agent.structure_soap.assert_not_called()
 
     def test_endpoints_do_not_accept_a_mode_parameter(self):

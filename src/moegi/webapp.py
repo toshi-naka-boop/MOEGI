@@ -14,14 +14,17 @@ G9-b実測値（再現率・誤検出率）はUIには出さない（ユーザ�
 
 from __future__ import annotations
 
+import dataclasses
 import html
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from moegi import fax, ingest, llm, nippou, pipeline, privacy, store
+from moegi import fax, ingest, llm, monthly, nippou, pipeline, privacy, store
+from moegi.privacy import dictionary as privacy_dictionary
 from moegi.privacy import vault as privacy_vault
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +37,31 @@ privacy.install_log_sanitizer()
 # 設定の読み込みに失敗したらアプリを起動させない（fail-closed）。
 # 「検査設定が読めないまま検査なしで動いてしまう」のが最悪なので、静かに既定値へ落とさない。
 PRIVACY_CONFIG = privacy.load_privacy_config()
+
+
+def _patient_code_options(selected: str = "") -> str:
+    """利用者コードの選択肢（ledger R-84）。氏名は画面に出さない。
+
+    実運用では認証つきの氏名表示に置き換わる想定（design/moegi/privacy.md §10-4）。
+    辞書が読めない場合は空にする——選べないことで「誰の記録か不明なまま保存される」を防ぐ。
+    """
+    try:
+        dictionary = privacy_dictionary.load_dictionary(PRIVACY_CONFIG.dictionary_path)
+    except Exception:  # noqa: BLE001 — 辞書の中身を例外経由で外へ出さない
+        return ""
+    return "".join(
+        f"<option value='{html.escape(code)}'{' selected' if code == selected else ''}>"
+        f"{html.escape(code)}</option>"
+        for code in privacy_dictionary.patient_codes(dictionary)
+    )
+
+
+def _normalize_visited_on(raw: str) -> str:
+    """訪問日を YYYY-MM-DD に正規化する。空・不正なら当日を使う。"""
+    try:
+        return date.fromisoformat(raw.strip()).isoformat()
+    except (ValueError, AttributeError):
+        return date.today().isoformat()
 
 # ledger R-77・R-80: 処置内容はLLMの自由記述抽出に任せず、ボタン選択式（複数選択可）にする
 # （処置名の表記揺れ・誤認識リスクを避けるため）。design.md §6.5「処置入力のボタン選択UI
@@ -246,6 +274,7 @@ def index() -> HTMLResponse:
     {run_list}
     <h2>日報エージェント</h2>
     <p><a href="/nippou">日報・SOAPの文字起こし→仮名化→構造化を試す</a>（design.md §6.5・要配慮個人情報のためローカル固定）</p>
+    <p><a href="/monthly">月報（1ヶ月分の日報を集計）</a>（ledger R-84・LLM不使用の決定論的な集計）</p>
     <p><a href="/privacy/audits">仮名化処理の監査記録</a>（design/moegi/privacy.md §10）</p>
     """
     return _render_page(body)
@@ -516,6 +545,13 @@ def nippou_form() -> HTMLResponse:
     <a href="/privacy/audits">監査記録を見る</a></p>
 
     <form method="post" action="/nippou/structure" enctype="multipart/form-data" id="nippou-form">
+      <label for="subject-code">利用者コード（ledger R-84: 月報の集計単位。LLMに同定させず選択式で確定する）</label>
+      <div class="run-form">
+        <select id="subject-code" name="subject_code">{_patient_code_options()}</select>
+        <label for="visited-on">訪問日</label>
+        <input type="date" id="visited-on" name="visited_on" value="{date.today().isoformat()}">
+      </div>
+
       <label>処置内容（複数選択可・ledger R-77: LLMではなくボタン選択で確定）</label>
       <div class="procedure-buttons">{procedure_checkboxes}</div>
 
@@ -710,18 +746,22 @@ def _gate_summary_html(result: privacy.GateResult) -> str:
     """
 
 
-def _recheck_form_html(sanitized_text: str, procedures: list[str], want_soap: bool) -> str:
+def _recheck_form_html(sanitized_text: str, context: "_RecordContext") -> str:
     """§12「修正して再検査」。仮名化済みテキストを人が直して再検査する。"""
     hidden = "".join(
-        f"<input type='hidden' name='procedures' value='{html.escape(p)}'>" for p in procedures
+        f"<input type='hidden' name='procedures' value='{html.escape(p)}'>"
+        for p in context.procedures
     )
-    soap_hidden = "<input type='hidden' name='soap' value='on'>" if want_soap else ""
+    if context.want_soap:
+        hidden += "<input type='hidden' name='soap' value='on'>"
+    hidden += f"<input type='hidden' name='subject_code' value='{html.escape(context.subject_code)}'>"
+    hidden += f"<input type='hidden' name='visited_on' value='{html.escape(context.visited_on)}'>"
     return f"""
     <h2>修正して再検査</h2>
     <p class="meta">残っている個人情報を手で消してから再検査してください。ここに表示されているのは
       仮名化済みのテキストです（元の値は表示されません）。</p>
     <form class="edit-form" method="post" action="/nippou/recheck">
-      {hidden}{soap_hidden}
+      {hidden}
       <textarea name="sanitized_text" rows="6">{html.escape(sanitized_text)}</textarea>
       <button type="submit">修正して再検査する</button>
     </form>
@@ -764,22 +804,65 @@ def _save_privacy_audit(result: privacy.GateResult, *, proceeded: bool) -> None:
         conn.close()
 
 
-def _structure_and_render(result: privacy.GateResult, procedures: list[str], want_soap: bool) -> HTMLResponse:
+@dataclasses.dataclass(frozen=True)
+class _RecordContext:
+    """1回の訪問記録に付随する、LLMを通さない確定値（ledger R-77・R-84）。
+
+    利用者コード・訪問日・処置内容はいずれも人が選んだ値で、LLMの推定に委ねない。
+    """
+
+    procedures: list[str]
+    want_soap: bool
+    subject_code: str
+    visited_on: str
+
+
+def _save_nippou_record(
+    result: privacy.GateResult,
+    context: _RecordContext,
+    record: nippou.NippouRecord,
+    soap: nippou.SoapRecord | None,
+) -> bool:
+    """日報・SOAPの構造化結果を保存する（月報の集計材料・ledger R-84）。
+
+    利用者コードが選ばれていない場合は保存しない——「誰の記録か分からない日報」を
+    DBへ入れると月報の集計が静かに狂う。保存できなかったことは画面に出す。
+    """
+    if not context.subject_code:
+        return False
+    subject_pseudonym = privacy_vault.stable_pseudonym(context.subject_code)
+    conn = _db_conn()
+    try:
+        store.save_nippou_record(
+            conn,
+            request_id=result.request_id,
+            subject_pseudonym=subject_pseudonym,
+            visited_on=context.visited_on,
+            gate_status=result.status.value,
+            checklist_version=record.checklist_version,
+            policy_version=result.policy_version,
+            items=[dataclasses.asdict(i) for i in record.items],
+            evaluation=dataclasses.asdict(record.evaluation) if record.evaluation else None,
+            procedures=list(record.procedures),
+            soap=dataclasses.asdict(soap) if soap is not None else None,
+        )
+    finally:
+        conn.close()
+    return True
+
+
+def _structure_and_render(result: privacy.GateResult, context: _RecordContext) -> HTMLResponse:
     """Privacy Gate の結果を受けて、通過していれば既存の構造化処理を呼ぶ。
 
     **この関数がセキュリティ層と既存処理の唯一の接続点**。
     cleared_for_downstream() が False の場合、agent.structure() /
-    structure_soap() を一切呼ばずに戻る（fail-closed）。
+    structure_soap() を一切呼ばず、日報の保存も行わずに戻る（fail-closed）。
     """
     header = "<h1>日報エージェント（design.md §6.5）</h1><p><a href='/nippou'>← もう一度試す</a></p>"
 
     if not privacy.cleared_for_downstream(result):
         _save_privacy_audit(result, proceeded=False)
-        body = (
-            header
-            + _gate_summary_html(result)
-            + _recheck_form_html(result.sanitized_text, procedures, want_soap)
-        )
+        body = header + _gate_summary_html(result) + _recheck_form_html(result.sanitized_text, context)
         return _render_page(body)
 
     sitedoc = pipeline.load_sitedoc()
@@ -789,23 +872,37 @@ def _structure_and_render(result: privacy.GateResult, procedures: list[str], wan
         agent.set_checklist(sitedoc.items)
         utterance_id = result.request_id[:8]
         record = agent.structure(
-            result.sanitized_text, utterance_id=utterance_id, procedures=procedures
+            result.sanitized_text, utterance_id=utterance_id, procedures=context.procedures
         )
         soap = (
             agent.structure_soap(
-                result.sanitized_text, utterance_id=utterance_id, procedures=procedures
+                result.sanitized_text, utterance_id=utterance_id, procedures=context.procedures
             )
-            if want_soap
+            if context.want_soap
             else None
         )
     finally:
         adapter.close()
 
     _save_privacy_audit(result, proceeded=True)
+    saved = _save_nippou_record(result, context, record, soap)
+
+    if saved:
+        saved_html = (
+            f"<p class='meta'>この記録を利用者 {html.escape(context.subject_code)} の"
+            f" {html.escape(context.visited_on)} の日報として保存しました。"
+            f"<a href='/monthly'>月報を見る</a></p>"
+        )
+    else:
+        saved_html = (
+            "<p class='run-warning'>⚠️ 利用者コードが選ばれていないため、この記録は保存していません"
+            "（月報の集計に入りません）。</p>"
+        )
 
     body = (
         header
         + _gate_summary_html(result)
+        + saved_html
         + "<h2>発話内容（仮名化済み）</h2>"
         + f"<p class='trace-text'>{html.escape(result.sanitized_text)}</p>"
         + _nippou_record_html(record)
@@ -819,6 +916,8 @@ def nippou_structure(
     utterance_text: str = Form(""),
     procedures: list[str] = Form([]),
     soap: str = Form(""),
+    subject_code: str = Form(""),
+    visited_on: str = Form(""),
     audio: UploadFile | None = File(None),
 ) -> HTMLResponse:
     """文字起こし → **Privacy Gate** → 既存の日報・SOAP構造化。
@@ -828,7 +927,12 @@ def nippou_structure(
        一般利用者がリクエスト単位で安全検査を無効化できないようにするため、
        設定ファイルと環境変数だけが変更経路になっている（privacy/config.py）。
     """
-    want_soap = bool(soap)
+    context = _RecordContext(
+        procedures=procedures,
+        want_soap=bool(soap),
+        subject_code=subject_code.strip(),
+        visited_on=_normalize_visited_on(visited_on),
+    )
     adapter = llm.LLMAdapter()
     tmp_path: Path | None = None
     try:
@@ -849,7 +953,7 @@ def nippou_structure(
         # 原文はここから先へ持ち出さない（ローカル変数を明示的に手放す）。
         text = ""
 
-    return _structure_and_render(gate_result, procedures, want_soap)
+    return _structure_and_render(gate_result, context)
 
 
 @app.post("/nippou/recheck", response_class=HTMLResponse)
@@ -857,18 +961,175 @@ def nippou_recheck(
     sanitized_text: str = Form(...),
     procedures: list[str] = Form([]),
     soap: str = Form(""),
+    subject_code: str = Form(""),
+    visited_on: str = Form(""),
 ) -> HTMLResponse:
     """§12「修正して再検査」。人が直した仮名化済みテキストを、同じGateにもう一度通す。
 
     再検査でも検査の厳しさは変えない（人が触ったから緩める、をしない）。
     """
-    want_soap = bool(soap)
+    context = _RecordContext(
+        procedures=procedures,
+        want_soap=bool(soap),
+        subject_code=subject_code.strip(),
+        visited_on=_normalize_visited_on(visited_on),
+    )
     adapter = llm.LLMAdapter()
     try:
         gate_result = _run_privacy_gate(sanitized_text, adapter=adapter)
     finally:
         adapter.close()
-    return _structure_and_render(gate_result, procedures, want_soap)
+    return _structure_and_render(gate_result, context)
+
+
+def _monthly_form_html(subject_code: str = "", month: str = "") -> str:
+    """月報の条件入力。**POSTで送る**——利用者コードをURLのクエリに載せないため。"""
+    return f"""
+    <h2>月報を作成</h2>
+    <form class="run-form" method="post" action="/monthly">
+      <label for="monthly-subject">利用者コード</label>
+      <select id="monthly-subject" name="subject_code">{_patient_code_options(subject_code)}</select>
+      <label for="monthly-month">対象月</label>
+      <input type="month" id="monthly-month" name="month"
+             value="{html.escape(month or date.today().strftime('%Y-%m'))}">
+      <button type="submit">月報を作成</button>
+    </form>
+    """
+
+
+def _monthly_report_html(report: monthly.MonthlyReport, subject_code: str) -> str:
+    if report.is_empty:
+        return (
+            f"<p class='run-warning'>利用者 {html.escape(subject_code)} の "
+            f"{report.year}年{report.month}月の日報がありません。"
+            "先に <a href='/nippou'>日報エージェント</a> で記録を作成してください。</p>"
+        )
+
+    procedures = (
+        "".join(
+            f"<tr><th style='text-align:left; padding:0.25rem 1rem 0.25rem 0;'>{html.escape(name)}</th>"
+            f"<td style='font-variant-numeric: tabular-nums;'>{count} 回</td></tr>"
+            for name, count in sorted(report.procedure_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        or "<tr><td class='meta'>処置の選択がありませんでした。</td></tr>"
+    )
+
+    fill_rates = "".join(
+        f"<tr><th style='text-align:left; padding:0.25rem 1rem 0.25rem 0; font-weight:500;'>"
+        f"{html.escape(r.label)}</th>"
+        f"<td style='font-variant-numeric: tabular-nums;'>{r.filled} / {r.total}"
+        f"（{r.rate * 100:.0f}%）</td></tr>"
+        for r in report.item_fill_rates
+    )
+
+    def _cell(value) -> str:
+        return "—" if value is None else html.escape(str(value))
+
+    vitals = (
+        "".join(
+            f"<tr><td>{html.escape(v.visited_on)}</td>"
+            f"<td>{_cell(v.systolic)}{'/' if v.systolic else ''}{_cell(v.diastolic) if v.systolic else ''}</td>"
+            f"<td>{_cell(v.temperature)}</td><td>{_cell(v.pulse)}</td><td>{_cell(v.spo2)}</td></tr>"
+            for v in report.vitals
+        )
+        or "<tr><td colspan='5' class='meta'>数値として読み取れたバイタルがありませんでした。</td></tr>"
+    )
+
+    notes = []
+    if report.unparsed_vital_visits:
+        notes.append(
+            f"バイタルを数値として読み取れなかった訪問が {report.unparsed_vital_visits} 件あります"
+            "（0件として集計せず、この件数として残しています）"
+        )
+    if report.non_passed_records:
+        notes.append(
+            f"Privacy Gate が passed 以外だった記録が {report.non_passed_records} 件含まれています"
+            "（段階導入モードで保存されたもの）"
+        )
+    if len(report.policy_versions) > 1:
+        notes.append(
+            "複数の仮名化ポリシーバージョンの記録が混在しています（"
+            + "、".join(html.escape(v) for v in report.policy_versions)
+            + "）"
+        )
+    notes_html = (
+        "<div class='run-warning'><ul>" + "".join(f"<li>{n}</li>" for n in notes) + "</ul></div>"
+        if notes
+        else ""
+    )
+
+    return f"""
+    <div class="proposal">
+      <div class="meta">利用者 {html.escape(subject_code)} ・ 安定仮名
+        {html.escape(report.subject_pseudonym)} ・ 集計はすべて決定論的（LLM不使用）</div>
+      <h2 style="margin-top:0.5rem;">{report.year}年{report.month}月の月報</h2>
+      <div class="chips">
+        <span class="chip">訪問 {report.visit_count} 回</span>
+        <span class="chip">訪問日数 {report.visit_days} 日</span>
+        <span class="chip">評価の記入 {report.evaluation_filled} / {report.evaluation_total}</span>
+      </div>
+      {notes_html}
+      <h3>処置別の実施回数</h3>
+      <table style="width:100%; border-collapse: collapse;">{procedures}</table>
+      <h3>チェックリスト項目の記入率</h3>
+      <table style="width:100%; border-collapse: collapse;">{fill_rates}</table>
+      <h3>バイタルの推移</h3>
+      <table style="width:100%; border-collapse: collapse; font-variant-numeric: tabular-nums;">
+        <tr><th style="text-align:left;">訪問日</th><th style="text-align:left;">血圧</th>
+            <th style="text-align:left;">体温</th><th style="text-align:left;">脈拍</th>
+            <th style="text-align:left;">SpO2</th></tr>
+        {vitals}
+      </table>
+    </div>
+    """
+
+
+@app.get("/monthly", response_class=HTMLResponse)
+def monthly_form() -> HTMLResponse:
+    """月報の作成フォーム（ledger R-84）。"""
+    body = f"""
+    <h1>月報</h1>
+    <p class="meta">保存済みの日報を1ヶ月分まとめます。集計はすべて決定論的で、
+      LLMは使いません——同じ日報からは常に同じ月報が出ます。
+      実名は保持しておらず、集計単位は利用者コードから導出した安定仮名です。</p>
+    {_monthly_form_html()}
+    """
+    return _render_page(body)
+
+
+@app.post("/monthly", response_class=HTMLResponse)
+def monthly_report(subject_code: str = Form(...), month: str = Form(...)) -> HTMLResponse:
+    """月報を表示する。
+
+    GETではなくPOSTで受けるのは、利用者コードをURLのクエリ文字列に載せないため
+    （ブラウザ履歴・アクセスログ・Referer に識別子が残るのを避ける）。
+    """
+    subject_code = subject_code.strip()
+    try:
+        year, month_number = (int(part) for part in month.split("-", 1))
+        date(year, month_number, 1)  # 妥当な年月かをここで確定させる
+    except (ValueError, TypeError):
+        today = date.today()
+        year, month_number = today.year, today.month
+
+    subject_pseudonym = privacy_vault.stable_pseudonym(subject_code)
+    conn = _db_conn()
+    try:
+        records = store.list_nippou_records_for_month(
+            conn, subject_pseudonym=subject_pseudonym, year=year, month=month_number
+        )
+    finally:
+        conn.close()
+
+    report = monthly.build(
+        records, subject_pseudonym=subject_pseudonym, year=year, month=month_number
+    )
+    body = (
+        "<h1>月報</h1>"
+        + _monthly_report_html(report, subject_code)
+        + _monthly_form_html(subject_code, f"{year:04d}-{month_number:02d}")
+    )
+    return _render_page(body)
 
 
 @app.get("/privacy/audits", response_class=HTMLResponse)
