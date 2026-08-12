@@ -88,6 +88,26 @@ CREATE TABLE IF NOT EXISTS fax_deliveries (
     generated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 配布のキュー型チャネル（design.md G8・ledger R-89）。store-and-forward。
+-- ⚠️ ここに積んでよいのは**承認済み更新案**だけ（チェックリスト項目ラベル＋通達原文の引用）。
+--    日報・SOAP・文字起こし原文・仮名対応表は積まない。delivery.enqueue() が
+--    ルールベースの検出器で本文を検査し、識別子が混じっていたら積むこと自体を拒否する。
+CREATE TABLE IF NOT EXISTS delivery_queue (
+    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    proposal_row_ids TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error_code TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    sent_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_queue_status ON delivery_queue(status, row_id);
+
 -- 日報・SOAPの構造化結果（月報の集計材料）。
 -- ⚠️ 保存するのは **Privacy Gate を通過した仮名化済みの構造化結果だけ**。
 --    文字起こし原文・音声はここにも他のどこにも保存しない。
@@ -504,6 +524,99 @@ def list_nippou_months(conn: sqlite3.Connection, subject_pseudonym: str) -> list
         (subject_pseudonym,),
     ).fetchall()
     return [row[0] for row in rows]
+
+
+_DELIVERY_COLUMNS = (
+    "row_id",
+    "run_id",
+    "channel",
+    "recipient",
+    "subject",
+    "body",
+    "proposal_row_ids",
+    "status",
+    "attempts",
+    "last_error_code",
+    "created_at",
+    "sent_at",
+)
+
+
+def save_delivery(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    channel: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    proposal_row_ids: list[int],
+) -> int:
+    """配信キューに1件積む（design.md G8・ledger R-89）。
+
+    積んだ時点では status='pending'。実際に送るのは delivery.flush()。
+    """
+    cursor = conn.execute(
+        """
+        INSERT INTO delivery_queue (run_id, channel, recipient, subject, body, proposal_row_ids)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, channel, recipient, subject, body, json.dumps(proposal_row_ids)),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def _delivery_row_to_dict(row: tuple) -> dict[str, Any]:
+    record = dict(zip(_DELIVERY_COLUMNS, row))
+    record["proposal_row_ids"] = json.loads(record["proposal_row_ids"])
+    return record
+
+
+def list_pending_deliveries(conn: sqlite3.Connection, *, limit: int = 100) -> list[dict[str, Any]]:
+    """送信待ちを古い順に返す（キューなので先入れ先出し）。"""
+    rows = conn.execute(
+        f"SELECT {', '.join(_DELIVERY_COLUMNS)} FROM delivery_queue "  # noqa: S608 — 列名は定数
+        "WHERE status = 'pending' ORDER BY row_id LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [_delivery_row_to_dict(row) for row in rows]
+
+
+def count_pending_deliveries(conn: sqlite3.Connection) -> int:
+    """「送信待ち n件」バッジ（G8）の n。"""
+    return conn.execute("SELECT COUNT(*) FROM delivery_queue WHERE status = 'pending'").fetchone()[0]
+
+
+def list_deliveries(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        f"SELECT {', '.join(_DELIVERY_COLUMNS)} FROM delivery_queue "  # noqa: S608 — 列名は定数
+        "ORDER BY row_id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [_delivery_row_to_dict(row) for row in rows]
+
+
+def mark_delivery_sent(conn: sqlite3.Connection, row_id: int) -> None:
+    conn.execute(
+        "UPDATE delivery_queue SET status = 'sent', attempts = attempts + 1, "
+        "last_error_code = NULL, sent_at = datetime('now') WHERE row_id = ?",
+        (row_id,),
+    )
+    conn.commit()
+
+
+def mark_delivery_attempt_failed(conn: sqlite3.Connection, row_id: int, error_code: str) -> None:
+    """送信に失敗した。**status は pending のまま**にする（G8: 消えたのではなく待っている）。
+
+    error_code は語彙が決まった短い文字列だけを渡すこと（例外メッセージを入れない。
+    宛先や本文が混じり得るため——design/moegi/privacy.md §10）。
+    """
+    conn.execute(
+        "UPDATE delivery_queue SET attempts = attempts + 1, last_error_code = ? WHERE row_id = ?",
+        (error_code, row_id),
+    )
+    conn.commit()
 
 
 def save_privacy_audit(

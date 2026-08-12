@@ -14,16 +14,18 @@ G9-b実測値（再現率・誤検出率）はUIには出さない（ユーザ�
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import html
 import tempfile
+from contextlib import asynccontextmanager, suppress
 from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from moegi import checklist, fax, ingest, llm, monthly, nippou, pipeline, privacy, store
+from moegi import checklist, delivery, fax, ingest, llm, monthly, nippou, pipeline, privacy, store
 from moegi.privacy import dictionary as privacy_dictionary
 from moegi.privacy import vault as privacy_vault
 
@@ -80,11 +82,71 @@ _PROCEDURE_OPTIONS = (
     "その他",
 )
 
-app = FastAPI(title="MOEGI 承認UI")
+#: 配信設定（design.md G8・ledger R-89）。認証情報は環境変数からのみ取る。
+DELIVERY_CONFIG = delivery.load_config()
+
+#: 回線復帰の検知間隔（秒）。デモの終幕（回線復帰→自動着弾）が「手を触れずに」
+#: 起きて見える程度に短く、かつプローブが煩くない程度に長く。
+DELIVERY_FLUSH_INTERVAL_SECONDS = 5.0
+
+
+async def _delivery_flusher() -> None:
+    """送信待ちを定期的に流す（design.md G8・R-16「手動再送ボタンは作らない」）。
+
+    オフラインの間は is_online() が False を返すので1件も送らず、キューは溜まり続ける。
+    回線が復帰した最初のティックでまとめて流れる。SQLite・SMTPはどちらもブロッキングなので
+    to_thread に逃がし、イベントループを止めない。
+    """
+    while True:
+        await asyncio.sleep(DELIVERY_FLUSH_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(_flush_deliveries_once)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — 背景タスクを1回の失敗で止めない
+            continue
+
+
+def _flush_deliveries_once() -> delivery.FlushResult:
+    conn = _db_conn()
+    try:
+        return delivery.flush(conn, config=DELIVERY_CONFIG)
+    finally:
+        conn.close()
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    task = asyncio.create_task(_delivery_flusher())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+app = FastAPI(title="MOEGI 承認UI", lifespan=_lifespan)
 
 
 def _db_conn():
     return store.connect()
+
+
+def _pending_delivery_badge() -> str:
+    """G8「送信待ち n件」バッジ。0件のときは何も出さない。"""
+    conn = _db_conn()
+    try:
+        pending = store.count_pending_deliveries(conn)
+    finally:
+        conn.close()
+    if not pending:
+        return ""
+    return (
+        f"<p class='run-warning'>📮 <strong>送信待ち {pending} 件</strong>。"
+        "回線が復帰すると自動で送信されます（手動の再送操作は必要ありません）。"
+        " <a href='/deliveries'>配信キューを見る</a></p>"
+    )
 
 
 _PAGE_STYLE = """
@@ -209,6 +271,7 @@ _PAGE_STYLE = """
 
 def _render_page(body: str) -> HTMLResponse:
     nav = "<nav class='home-nav'><a href='/'>← MOEGI ホーム</a></nav>"
+    body = _pending_delivery_badge() + body
     return HTMLResponse(
         f"<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -276,6 +339,7 @@ def index() -> HTMLResponse:
     <p><a href="/nippou">日報・SOAPの文字起こし→仮名化→構造化を試す</a>（design.md §6.5・要配慮個人情報のためローカル固定）</p>
     <p><a href="/monthly">月報（1ヶ月分の日報を集計）</a>（ledger R-84・LLM不使用の決定論的な集計）</p>
     <p><a href="/privacy/audits">仮名化処理の監査記録</a>（design/moegi/privacy.md §10）</p>
+    <p><a href="/deliveries">配信キュー</a>（design.md G8・キュー型チャネル・回線復帰で自動送信）</p>
     """
     return _render_page(body)
 
@@ -463,11 +527,44 @@ def _redirect_to_run(conn, proposal_row_id: int) -> RedirectResponse:
     return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
 
+def _enqueue_approved_notice(conn, proposal_row_id: int) -> None:
+    """承認された更新案を配信キューへ積む（design.md G8・ledger R-89）。
+
+    オフラインでも「積む」ことは必ず成功する——これが store-and-forward の要で、
+    回線の有無に関わらず承認操作が完結する。実際に送るのは背景の自動フラッシュ。
+
+    ⚠️ delivery.enqueue() は本文を検査し、識別子が混じっていたら積むこと自体を拒否する。
+       拒否された場合は承認自体は成立させ、配信だけ行わない（承認を巻き戻すと
+       「承認したのに承認されていない」というもっと分かりにくい状態になる）。
+    """
+    row = store.get_proposal_for_review(conn, proposal_row_id)
+    if row is None:
+        return
+    run_id_row = conn.execute(
+        "SELECT run_id FROM proposals WHERE row_id = ?", (proposal_row_id,)
+    ).fetchone()
+    subject, body = delivery.format_proposal_notice([row])
+    today = date.today()
+    try:
+        delivery.enqueue(
+            conn,
+            run_id=run_id_row[0] if run_id_row else "",
+            subject=subject,
+            body=body,
+            proposal_row_ids=[proposal_row_id],
+            config=DELIVERY_CONFIG,
+            today=(today.year, today.month, today.day),
+        )
+    except delivery.DeliveryRefused:
+        pass  # 例外の中身はここで捨てる（本文・宛先を握ったまま外へ流さない）
+
+
 @app.post("/proposals/{proposal_row_id}/approve")
 def approve_proposal(proposal_row_id: int) -> RedirectResponse:
     conn = _db_conn()
     try:
         store.update_proposal_status(conn, proposal_row_id, "承認")
+        _enqueue_approved_notice(conn, proposal_row_id)
         return _redirect_to_run(conn, proposal_row_id)
     finally:
         conn.close()
@@ -1276,6 +1373,63 @@ def monthly_report(subject_code: str = Form(...), month: str = Form(...)) -> HTM
         + _monthly_report_html(report, subject_code)
         + _monthly_form_html(subject_code, f"{year:04d}-{month_number:02d}")
     )
+    return _render_page(body)
+
+
+@app.get("/deliveries", response_class=HTMLResponse)
+def deliveries_page() -> HTMLResponse:
+    """配信キュー（design.md G8・ledger R-89）。
+
+    ⚠️ **手動の再送ボタンは置かない**（R-16）。「消えたのではなく待っている」ことが
+    見えれば十分で、人が押さないと届かないなら store-and-forward の意味が無い。
+    """
+    conn = _db_conn()
+    try:
+        rows = store.list_deliveries(conn)
+        pending = store.count_pending_deliveries(conn)
+    finally:
+        conn.close()
+
+    if not rows:
+        listing = "<p class='meta'>配信はまだありません。更新案を承認すると、ここに積まれます。</p>"
+    else:
+        listing = "".join(
+            f"<div class='proposal' data-status='{'承認' if r['status'] == 'sent' else '未承認'}'>"
+            f"<div class='meta'>{html.escape(r['created_at'])} ・ 宛先 {html.escape(r['recipient'])}"
+            f" ・ チャネル {html.escape(r['channel'])}</div>"
+            f"<div class='chips'><span class='chip'>"
+            f"{'送信済み' if r['status'] == 'sent' else '送信待ち'}</span>"
+            + (f"<span class='meta'>試行 {r['attempts']} 回</span>" if r["attempts"] else "")
+            + (
+                f"<span class='meta'>{html.escape(r['sent_at'])} に送信</span>"
+                if r["sent_at"]
+                else ""
+            )
+            + "</div>"
+            f"<p class='rationale'>{html.escape(r['subject'])}</p>"
+            "</div>"
+            for r in rows
+        )
+
+    channel_note = (
+        f"送信先は<strong>メール</strong>（{html.escape(DELIVERY_CONFIG.recipient)}）です。"
+        if DELIVERY_CONFIG.channel == delivery.CHANNEL_EMAIL
+        else "SMTPが未設定のため、送信は <code>data/outbox/</code> への書き出しになります"
+        "（環境変数 MOEGI_SMTP_HOST を設定すると実際にメールを送ります）。"
+    )
+
+    body = f"""
+    <h1>配信キュー</h1>
+    <p class="meta">承認された更新案は、まずここに積まれます（store-and-forward）。
+      オフライン中は「送信待ち」のまま溜まり、回線が復帰すると
+      {DELIVERY_FLUSH_INTERVAL_SECONDS:.0f}秒以内に<strong>自動で</strong>送信されます。
+      手動の再送ボタンは意図的に置いていません。{channel_note}</p>
+    <p class="meta">積んでよいのは承認済み更新案（チェックリスト項目のラベルと更新後の文言）だけです。
+      日報・SOAP・文字起こし原文・仮名対応表は積みません——本文に識別子が混じっていた場合、
+      キューに入れること自体を拒否します。</p>
+    <h2>送信待ち {pending} 件</h2>
+    {listing}
+    """
     return _render_page(body)
 
 

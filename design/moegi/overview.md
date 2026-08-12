@@ -45,7 +45,8 @@ flowchart TD
     UI -->|承認/却下/編集| STORE
     UI --> FAX["FAX様式PDF<br/>(fax.py・WeasyPrint)<br/>配信履歴をDBに記録(R-76)"]
 
-    STORE -.->|"D6未着手"| LINE[LINE配布<br/>キュー型・store&forward]
+    STORE --> DQ["配布キュー (delivery.py)<br/>store&forward・送信待ちバッジ<br/>回線復帰で自動送信(R-89)"]
+    DQ -->|"メール(送信先は差し替え可能)"| MAIL[管理者へ着弾]
 
     subgraph nippou["日報・SOAPエージェント (nippou.py) — 要配慮個人情報を扱う工程"]
         MIC["🎙モバイル録音UI(R-80)<br/>MediaRecorder→.webm"] -->|文字起こし| PGATE
@@ -62,10 +63,10 @@ flowchart TD
     classDef done fill:#d4edda,stroke:#2e7d32,color:#1a1a1a
     classDef pending fill:#f5f5f5,stroke:#999,color:#666,stroke-dasharray: 4 3
     class OLD,NEW,SITE,INGEST,DIFF,REQ,MATCH,DRAFT,STORE,UI,ORCAFB,LOCALFB,FAX,MIC,GWS,GEMMA,BTN,nippou,PGATE,VAULT,NREC,MONTH done
-    class LINE pending
+    class DQ,MAIL done
 ```
 
-緑＝実装・実機検証済み。グレー点線＝未着手（LINEキュー型配布・§7台本作り直し＝D6以降）。
+緑＝実装・実機検証済み。
 
 ## 実装進捗（D1〜D8）
 
@@ -83,7 +84,7 @@ flowchart TD
 | D5フォローアップ2 | N-8対策(a)(b)実装採用・オーケストレーションLLM実験実装（/design-loop・批評round-4） | ✅ **完了（2026-08-12深夜・ユーザー就寝中に自律実施）** |
 | セキュリティ層 | 仮名化・Privacy Gate（ルール／辞書／ローカルLLM／再検査／fail-closed／仮名対応表の暗号化保管／ログサニタイザー／監査記録）＋ SOAP構造化の追加 | ✅ **完了（2026-08-12）**。仕様は [privacy.md](./privacy.md) |
 | 月報 | 日報の永続化（安定仮名で保存）＋ 月報の決定論的な集計（LLM不使用）。R-15「月報はスコープ外」を条件付きで撤回 | ✅ **完了（2026-08-12）**。ledger R-84/R-85・[privacy.md §6-b](./privacy.md) |
-| D6 | ~~G6周りのUI~~（✅Before/After比較画面を実装）・~~チェックリスト項目の不変ID設計~~（✅R-88で導入）・**LINEキュー型チャネル**（未着手・外部連携のため要承認）・**§7台本の作り直し**（✅script-v2.mdにドラフト・要レビュー）・実機スマホでの録音UI確認（未） | 🔶 一部完了 |
+| D6 | ✅Before/After比較画面・✅項目の不変ID（R-88）・✅キュー型チャネル（R-89・メール）・✅§7台本の作り直し（script-v2.md・要レビュー）／残: 実機スマホでの録音UI確認 | 🔶 ほぼ完了 |
 | D7 | オフライン本番通し・精度差実測・Before動画・台本確定 | ⬜ 未着手 |
 | D8 | 予備日・通しリハ | ⬜ 未着手 |
 
@@ -134,11 +135,11 @@ flowchart TD
 ### 5. モバイル日報UIの実機確認（R-80）
 録音UI・処置ボタンは実音声ファイルのアップロード経路のみ確認済み。実機スマホ・タブレットでのマイク許可フロー・タッチ操作は未確認（ヘッドレスブラウザでは検証不可）。
 
-### 6. LINEキュー型配布（未着手・外部連携のため要承認）
-LINE store-and-forward（送信待ちバッジ・復帰時自動フラッシュ）は未実装。G8は死守ゴールで、
-デモの終幕（R-18「放っておいても必ず届いた」）を担当する要素でもある。新規の外部サービス
-連携のため着手前にユーザー承認が必要。
-Before/After比較画面は **2026-08-12に実装済み**（`/runs/{run_id}/before-after`）。
+### 6. （解決済み）キュー型配布
+**2026-08-13に実装済み**（ledger R-89）。送信先はLINE→**メール**に変更した——G8の要件
+（キューに積まれる／復帰で自動的に流れる／手動再送しない）は送信先に依存しないため、
+外部連携の承認が要らない方を採った。送信先は差し替え可能。
+Before/After比較画面も **2026-08-12に実装済み**（`/runs/{run_id}/before-after`）。
 
 ### 7. （解決済み）オーケストレーションLLMの本番採用判断
 4回ずつの追加計測の結果、誤検出率のわずかな改善と引き換えに再現率が平均で悪化していると
