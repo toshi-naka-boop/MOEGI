@@ -6,8 +6,7 @@
   "approvedAt": "2026-08-08",
   "openIssueIds": [
     "N-4",
-    "R-56",
-    "script-rework"
+    "R-56"
   ],
   "requiredReads": [
     "design.md",
@@ -30,13 +29,13 @@
     "mobile-https": "✅コード側は完了（R-82）。mkcertでlocalhost・127.0.0.1・MacのLAN IP（192.168.0.104）向けのローカル証明書を発行し、uvicornを--ssl-keyfile/--ssl-certfileでHTTPS化（--host 0.0.0.0で外部到達可）。https://192.168.0.104:8420/ で200を確認。証明書一式（certs/）は秘密鍵を含むため.gitignore対象・リポジトリには含めない。rootCA.pemはユーザーへ送付済み。**残作業はユーザー側の手動操作**（下記carryOverToD6参照）",
     "security-layer": "✅完了（2026-08-12）。仮名化・Privacy Gate（ルール→辞書→ローカルLLM→独立再検査→fail-closed）、仮名対応表のAES-256-GCM保管、ログサニタイザー、監査記録。SOAP構造化を追加。実機実測で7Bモデルの本文まるごと差し替えを発見しclinical_numbers_droppedガードを追加（R-86）。仕様は design/moegi/privacy.md",
     "monthly-report": "✅完了（2026-08-12）。日報の永続化＋月報の決定論的集計（LLM不使用）。利用者コードは選択式、仮名は鍵つきHMACで導出（R-84/R-85）。項目の不変IDを導入し、ラベル変更をまたいでも月報が二重計上しないことをE2E確認（R-88）",
-    "g6-before-after": "✅完了（2026-08-12）。同一発話×変更前後チェックリストの比較画面。Privacy Gateを迂回しない"
+    "g6-before-after": "✅完了（2026-08-12）。同一発話×変更前後チェックリストの比較画面。Privacy Gateを迂回しない",
+    "delivery-queue": "✅完了（2026-08-13）。配布のキュー型チャネル（store-and-forward）。送信先はLINE→メールへ変更（G8の要件は送信先に依存しないため・R-89）。手動再送ボタンは意図的に置かず、置かれていないことをテストで固定。enqueue時に本文を検査し識別子が混じればキューに入れること自体を拒否する",
+    "script-v2": "✅完了（2026-08-13）。§7デモ台本v2をユーザー承認・design.md §7へ反映（R-90）。ライブ／事前収録の切り分け、深掘りモジュールS/M、事前収録の撮影リストを含む"
   },
-  "nextAction": "【最優先・要ユーザー判断】Mac mini電源問題（R-83）——会場に確保できる見込みか回答待ち。確保できないとD6以前にG3オフライン完走・日報ローカル処理のデモ自体が実演不可能になる。並行して、mkcertのCA登録（Mac本体への`mkcert -install`・実演端末へのrootCA.pemインストール）を実施。両方片付いたら朝の判断タスク（下記carryOverToD6・checklist-item-identity）→D6（LINEキュー型チャネル・G6接続点・§7台本#6の作り直し）へ",
+  "nextAction": "【明日朝・ユーザー手動】①mkcertのCA登録（Mac本体 mkcert -install ＋ 実演端末へrootCA.pem） ②会社のiPhoneで /nippou の録音UIを実機確認（テザリング接続後は scripts/reissue_cert.sh を1回実行）。 その後 D7（事前収録V1〜V4・オフライン本番通し・Before動画・原価/精度の対比表の数値確定）へ。電源はレンタルの方向（R-83）。確保できない場合の代替台本は design.md §7.6",
   "commitPolicy": "D区切りごとにコミットする（feat: D1 / feat: D2 ...）。バグ修正はfix:で分離。ユーザー決定 2026-08-09",
   "carryOverToD6": {
-    "script-rework": "§7台本#6を実ワークフロー（現場録音→事務所バッチ処理）に合わせて作り直す。design.md §7に2026-08-12深夜のドラフト案あり（要レビュー・🔧マーク）。R-83の電源問題次第で「バックアップ動画が主手段」に前提が変わる可能性あり",
-    "line-queue": "LINEキュー型チャネル（store-and-forward・送信待ちバッジ・復帰時自動フラッシュ）は未実装。外部サービス連携のため実装前にユーザー承認が必要",
     "mobile-nippou-real-device-check": "R-80/R-81の録音UIは実機スマホ・タブレットのマイク許可フロー・タッチ操作で未確認（ヘッドレスブラウザ・Simulator両方とも検証不可だった）",
     "n8-remaining-3-cells": "eval-loopで45/48(93.8%)まで改善後に残る3セル（e/訪問日数頻度・g_a/時間の記録＝誤検出2件、g_i/訪問日数頻度＝見逃し1件）。原因は③-a要件抽出（requirement_text）の要約が「計画」と「記録」の区別・合算ルールの含意を落としている可能性。根本対応には③-aプロンプトの改善が必要かもしれない",
     "mobile-nippou-ca-install": "R-82: mkcertのCA登録が未完了。①ユーザーのターミナルで`mkcert -install`（Mac自身の信頼登録・パスワード必要） ②実演端末（iOS/Android）へrootCA.pemを転送し信頼登録（iOSは「証明書信頼設定」で完全信頼が別途必要）。完了後 https://192.168.0.104:8420/nippou で警告なしにマイクが使えるはず",
@@ -53,5 +52,5 @@
   "delegation": {
     "批評round-4": "design-critic opus + codex/gpt-5.6-sol xhigh"
   },
-  "lastUpdated": "2026-08-12（セキュリティ層・月報・G6比較画面・不変ID導入まで反映）"
+  "lastUpdated": "2026-08-13（キュー型配布・台本v2確定まで反映）"
 }
