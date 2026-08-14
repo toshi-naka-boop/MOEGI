@@ -267,8 +267,19 @@ Privacy Gate状態／検出した情報種別と件数／ポリシーバージ�
 2. 仮名対応表を送らないこと（`GateResult` に対応表は載っていない）
 3. 送信先のデータ保持ポリシー・所在地を確認すること
 4. 送信の有無を監査記録（`external_transmission`）に残すこと
-5. OrcaRouter Guardrails を使う場合、それは**その経路における二重目の防御**であり、
-   本ドキュメントのローカル仮名化を代替しない
+5. OrcaRouter Guardrails は**その経路における二重目の防御**であり、
+   本ドキュメントのローカル仮名化を代替しない。
+   **【2026-08-15 実装・ledger R-91】** クライアント側の対応とポリシー定義を実装した:
+   - `llm.py`: ゲートウェイの遮断（HTTP 400 `guardrail_blocked`）を通常エラーと区別し、
+     skip-retry（cloud_fallback_model を試さない）でローカルへフォールバック。
+     circuit breaker には加算しない（ゲートウェイ自体は健全に応答しているため）。
+     発火は `cost_records.guardrail_blocked` に監査として残る
+   - `scripts/setup_orca_guardrail.py`: ポリシー `moegi-cloud-boundary` の定義
+     （日本向けカスタム検出器6種はRE2安全・マスク表記はMOEGIの型付きタグと同一）と
+     冪等プロビジョニング・サンドボックス検証
+   - **未完了の1操作**: ORCA管理APIはコンソールのアクセストークンが必要
+     （リレー用 `sk-orca-` キーでは認証不可・実測）。ガードレールの作成と
+     APIキーへの紐づけはコンソールでの手動操作（約5分・スクリプトが手順を印字する）
 
 ## 10. 残存リスク（未解決）
 

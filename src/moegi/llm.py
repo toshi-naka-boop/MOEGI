@@ -10,6 +10,10 @@
     degraded : このアダプタ自身がローカルへフォールバックした場合 True
     timeout  : ローカル呼び出しがtimeoutした場合 True（v10・design.md §6.6）。
                この場合 text は空文字列。呼び出し元は「判定不能」として扱うこと
+    guardrail_blocked : ORCA Guardrails（ゲートウェイ側の第二防衛線・ledger R-91）が
+               入力を遮断し、ローカルへフォールバックした場合 True。skip-retryのため
+               cloud_fallback_model は試さない。circuit breakerも増やさない（ゲートウェイ
+               自体は健全に応答しているため）
 
 接続情報（design.md §14）:
     ORCA_BASE_URL — 未設定なら DEFAULT_ORCA_BASE_URL。末尾の /v1 の有無はどちらでもよい
@@ -110,6 +114,17 @@ class OrcaCredentialsMissing(RuntimeError):
 
 class OrcaUnavailable(RuntimeError):
     """circuit breakerが開いていて、ORCAへの呼び出し自体を試みなかった。"""
+
+
+class OrcaGuardrailBlocked(RuntimeError):
+    """ORCA Guardrails が入力を遮断した（HTTP 400 / error code `guardrail_blocked`）。
+
+    ledger R-91: ORCAゲートウェイ側の第二防衛線。ゲートウェイはこの応答を
+    skip-retry（同じプロンプトを再送しても同じ判定）としてマークするため、
+    呼び出し側は cloud_fallback_model への再試行を**行ってはいけない**
+    （同一キー＝同一ガードレールで、また遮断されるだけ）。
+    このメッセージにプロンプト本文・検出値は決して含めない。
+    """
 
 
 @dataclass
@@ -302,6 +317,16 @@ class LLMAdapter:
                 price_jpy_per_1k_in=stage_cfg.price_jpy_per_1k_in,
                 price_jpy_per_1k_out=stage_cfg.price_jpy_per_1k_out,
             )
+        except OrcaGuardrailBlocked:
+            # ledger R-91: ゲートウェイの第二防衛線が発火。skip-retryのため
+            # cloud_fallback_model は試さない（同一キー＝同一ガードレール）。
+            # ローカルならデータは事業所外へ出ないので、完走優先（§6.6）でローカルへ落とす。
+            # ゲートウェイ自体は健全に応答しているので circuit breaker は増やさない。
+            result = self._call_local(
+                stage_cfg.fallback_model, prompt, opts, degraded=True, fallback_level=2
+            )
+            result["guardrail_blocked"] = True
+            return result
         except (httpx.HTTPError, OrcaCredentialsMissing):
             pass  # 主モデル失敗。ledger R-79: ローカルに落ちる前にORCA別プロバイダを試す
 
@@ -318,6 +343,12 @@ class LLMAdapter:
                 )
                 result["degraded"] = True
                 result["fallback_level"] = 1
+                return result
+            except OrcaGuardrailBlocked:
+                result = self._call_local(
+                    stage_cfg.fallback_model, prompt, opts, degraded=True, fallback_level=2
+                )
+                result["guardrail_blocked"] = True
                 return result
             except (httpx.HTTPError, OrcaCredentialsMissing):
                 pass  # 別プロバイダも失敗＝ORCAエンドポイント自体が不調の可能性
@@ -384,6 +415,15 @@ class LLMAdapter:
             json=body,
             timeout=timeout,
         )
+        # ledger R-91: ORCA Guardrails の遮断は HTTP 400 + error code `guardrail_blocked`。
+        # 通常のHTTPエラー（フォールバック対象）と区別する。判定に失敗したら通常エラー扱い。
+        if getattr(response, "status_code", None) == 400:
+            try:
+                error_code = (response.json().get("error") or {}).get("code", "")
+            except Exception:  # noqa: BLE001 — 本文がJSONでない400は通常エラーとして扱う
+                error_code = ""
+            if error_code == "guardrail_blocked":
+                raise OrcaGuardrailBlocked("ORCA Guardrailsが入力を遮断しました")
         response.raise_for_status()
         latency_ms = (time.monotonic() - start) * 1000
 
@@ -417,6 +457,7 @@ class LLMAdapter:
             "backend": f"orca:{model}",
             "degraded": False,
             "timeout": False,
+            "guardrail_blocked": False,
             "latency_ms": latency_ms,
             "resolved_model": resolved_model,
             "fallback_level": fallback_level,
@@ -458,6 +499,7 @@ class LLMAdapter:
                 "backend": f"local:{model}",
                 "degraded": True,
                 "timeout": True,
+                "guardrail_blocked": False,
                 "latency_ms": latency_ms,
                 "resolved_model": model,
                 "fallback_level": fallback_level,
@@ -475,6 +517,7 @@ class LLMAdapter:
             "backend": f"local:{model}",
             "degraded": degraded,
             "timeout": False,
+            "guardrail_blocked": False,
             "latency_ms": latency_ms,
             "resolved_model": model,
             "fallback_level": fallback_level,

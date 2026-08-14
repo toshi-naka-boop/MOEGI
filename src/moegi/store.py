@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS cost_records (
     resolved_model TEXT NOT NULL,
     fallback_level INTEGER NOT NULL,
     timeout INTEGER NOT NULL DEFAULT 0,
+    guardrail_blocked INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -168,6 +169,13 @@ def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(cost_records)")}
     if "timeout" not in columns:
         conn.execute("ALTER TABLE cost_records ADD COLUMN timeout INTEGER NOT NULL DEFAULT 0")
+    # ledger R-91: ORCA Guardrails（ゲートウェイ側の第二防衛線）が遮断してローカルへ
+    # フォールバックした呼び出しのフラグ。残さないと「第二防衛線が実際に働いたか」を
+    # 後から監査できない。
+    if "guardrail_blocked" not in columns:
+        conn.execute(
+            "ALTER TABLE cost_records ADD COLUMN guardrail_blocked INTEGER NOT NULL DEFAULT 0"
+        )
     # ledger R-88: 既存DB（不変IDを持たない旧スキーマ）へ列を追加する。既存行の
     # sitedoc_item_key は NULL のままにする——過去の判定はラベルでしか記録されておらず、
     # あとから正しい不変IDを推測することはできない。突き合わせ側がラベルへ
@@ -198,13 +206,14 @@ def save_cost_record(
     resolved_model: str,
     fallback_level: int,
     timeout: bool = False,
+    guardrail_blocked: bool = False,
 ) -> None:
     conn.execute(
         """
         INSERT INTO cost_records
             (run_id, stage, backend, tokens_in, tokens_out, cost_jpy,
-             latency_ms, degraded, resolved_model, fallback_level, timeout)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             latency_ms, degraded, resolved_model, fallback_level, timeout, guardrail_blocked)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -218,6 +227,7 @@ def save_cost_record(
             resolved_model,
             fallback_level,
             int(timeout),
+            int(guardrail_blocked),
         ),
     )
     conn.commit()
@@ -721,4 +731,5 @@ def record_from_llm_result(conn: sqlite3.Connection, run_id: str, stage: str, re
         resolved_model=result.get("resolved_model", ""),
         fallback_level=result.get("fallback_level", 0),
         timeout=result.get("timeout", False),
+        guardrail_blocked=result.get("guardrail_blocked", False),
     )
