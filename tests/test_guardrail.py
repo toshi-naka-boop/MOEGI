@@ -227,8 +227,6 @@ class GuardrailPolicyTest(unittest.TestCase):
 
     def test_patterns_fire_on_synthetic_identifiers(self):
         samples = {
-            "jp_insurance_number": "被保険者証番号 12345678 を確認",
-            "jp_medical_card_number": "診察券番号 A-99881 を控えた",
             "jp_patient_id": "利用者ID P-100234 の記録",
             "jp_phone": "連絡先は090-1234-5678です",
             "jp_postal_code": "〒160-0023 へ郵送",
@@ -268,9 +266,19 @@ class GuardrailPolicyTest(unittest.TestCase):
         self.assertEqual(mask_rule["action"], "mask")  # 既定は mask（連絡先系）
 
     def test_block_rule_comes_before_mask_rule(self):
-        # maskが先に走ると番号がマスクされ、後段のblockが原文を見られず発火しない恐れがある。
+        # ルールは逐次実行（実測）。定義上はblockを先頭に置きつつ、順序に依存しないよう
+        # mask側にはblock対象の検出器を置かない（次のテストで固定）。
         payload = guardrail_script.build_guardrail_payload()
         self.assertEqual([r["action"] for r in payload["rules"]], ["block", "mask"])
+
+    def test_mask_rule_does_not_contain_block_targets(self):
+        # コンソール実測（2026-08-15）: mask側に保険証・診察券の検出器があると、
+        # 逐次実行で先にマスクされ、block regexが原文を見られず発火しない。
+        payload = guardrail_script.build_guardrail_payload()
+        mask_rule = payload["rules"][1]
+        names = {e["name"] for e in mask_rule["custom_entities"]}
+        self.assertNotIn("jp_insurance_number", names)
+        self.assertNotIn("jp_medical_card_number", names)
 
     def test_block_pattern_is_re2_safe_and_fires_on_synthetic_numbers(self):
         pattern = guardrail_script.JP_BLOCK_PATTERN
@@ -284,7 +292,7 @@ class GuardrailPolicyTest(unittest.TestCase):
         # ORCA側のマスクがMOEGIの型付きタグと同じ表記になる（再検査・表示が一貫する）。
         tags = {e["name"]: e["mask_with"] for e in guardrail_script.CUSTOM_ENTITIES}
         self.assertEqual(tags["jp_phone"], "[[PHONE]]")
-        self.assertEqual(tags["jp_insurance_number"], "[[INSURANCE_NUMBER]]")
+        self.assertEqual(tags["jp_postal_code"], "[[POSTAL_CODE]]")
 
     def test_observe_mode_downgrades_everything_to_flag(self):
         payload = guardrail_script.build_guardrail_payload(mode="observe")
