@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import html
+import re
 import tempfile
 from contextlib import asynccontextmanager, suppress
 from datetime import date
@@ -39,6 +40,22 @@ privacy.install_log_sanitizer()
 # 設定の読み込みに失敗したらアプリを起動させない（fail-closed）。
 # 「検査設定が読めないまま検査なしで動いてしまう」のが最悪なので、静かに既定値へ落とさない。
 PRIVACY_CONFIG = privacy.load_privacy_config()
+
+
+#: 仮名（PATIENT_001等）と型付きタグ（[[PHONE]]等）。発話表示でハイライトする対象。
+_PSEUDONYM_RE = re.compile(
+    r"(?:PATIENT|NURSE|DOCTOR|FACILITY|FAMILY|PERSON)_[A-Za-z0-9]+|\[\[[A-Z_0-9]+\]\]"
+)
+
+
+def _highlight_pseudonyms(text: str) -> str:
+    """仮名化済みテキストの仮名・タグを <span class='pseudo'> で目立たせる（handoff §⑤）。
+
+    エスケープ後の文字列に対して差し込む。仮名もタグも英数字と [[ ]] だけで構成され
+    html.escape で変化しないので、エスケープ後でも正規表現がそのまま一致する。
+    """
+    escaped = html.escape(text)
+    return _PSEUDONYM_RE.sub(lambda m: f"<span class='pseudo'>{m.group(0)}</span>", escaped)
 
 
 def _patient_code_options(selected: str = "") -> str:
@@ -333,39 +350,373 @@ _PAGE_STYLE = """
     padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--ink-soft);
   }
 
-  /* ==== 互換（①③〜⑨の移行が済むまで残す旧コンポーネント） ==== */
-  .run-warning {
-    background: var(--warn-soft); border-left: 4px solid var(--warn-icon);
-    border-radius: 0 8px 8px 0; padding: 10px 16px; font-size: 14px; color: var(--ink);
-    margin: 12px 0;
+  /* ==== ページ共通の小物 ==== */
+  .page-sub, .run-sub { color: var(--ink-soft); font-size: 13px; margin: 0 0 20px; }
+  .home-nav a { display: inline-flex; align-items: center; min-height: 44px; }
+  section { margin-bottom: 36px; }
+  .field-hint { font-size: 13px; color: var(--ink-soft); margin: 6px 0 0; }
+  .section-hint { font-size: 12px; color: var(--ink-soft); margin: 6px 0 0; }
+  .empty-state {
+    background: var(--paper-raised); border: 1px dashed var(--line);
+    border-radius: 12px; padding: 40px 20px; text-align: center;
   }
-  .run-form { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
-  select, input[type="date"], input[type="month"] {
-    font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
-    background: var(--paper-raised); color: var(--ink); min-height: 44px;
+  .empty-state .empty-icon { font-size: 32px; display: block; margin-bottom: 8px; }
+  .empty-state p { margin: 0; color: var(--ink-soft); font-size: 14px; }
+  .empty-state p strong { color: var(--ink); font-size: 16px; }
+  .empty-state a { display: inline-flex; align-items: center; min-height: 44px; font-weight: 700; margin-top: 4px; }
+  .pseudo {
+    background: var(--moegi-soft); border-bottom: 2px solid var(--moegi-accent);
+    border-radius: 3px; padding: 0 4px; font-weight: 600; color: var(--ink); white-space: nowrap;
   }
-  .procedure-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 20px; }
-  .procedure-pill {
-    display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px;
-    border: 1px solid var(--line); border-radius: 999px; background: var(--paper-raised);
-    font-size: 14px; cursor: pointer; user-select: none; min-height: 44px;
-  }
-  .procedure-pill:has(input:checked) {
-    background: var(--moegi-soft); border-color: var(--moegi); color: var(--moegi-deep); font-weight: 600;
-  }
-  .procedure-pill input { accent-color: var(--moegi); width: 18px; height: 18px; }
-  .record-controls { display: flex; align-items: center; gap: 12px; margin: 8px 0 20px; }
-  #record-btn { min-height: 48px; padding: 0 22px; font-size: 16px; }
-  #nippou-form > label { display: block; font-weight: 600; margin: 16px 0 4px; }
-  .run-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-  .run-list a { font-variant-numeric: tabular-nums; font-size: 14px; }
 
+  /* ==== 進行表現（handoff: 唯一の意図的なJS is-submitting で切替） ==== */
+  .progress-state { display: none; }
+  .is-submitting .btn-primary, .is-submitting button[type="submit"] { display: none; }
+  .is-submitting .progress-state {
+    display: flex; align-items: center; gap: 12px;
+    min-height: 48px; padding: 0 18px; border-radius: 8px;
+    background: var(--moegi-soft); border: 1.5px solid var(--moegi);
+    font-size: 15px; font-weight: 700; color: var(--moegi-deep);
+    position: relative; overflow: hidden; flex: 1 1 auto;
+  }
+  .progress-state::before {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--moegi) 18%, transparent), transparent);
+    animation: progress-sweep 1.6s linear infinite;
+  }
+  @keyframes progress-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  .spinner {
+    width: 18px; height: 18px; flex: none; border-radius: 50%;
+    border: 2.5px solid var(--line); border-top-color: var(--moegi);
+    animation: spin 0.9s linear infinite; position: relative;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .progress-state small { font-weight: 400; color: var(--ink-soft); font-size: 12px; }
+
+  /* ==== ①ホーム ==== */
+  h1 .brand-mark {
+    width: 34px; height: 34px; border-radius: 8px; background: var(--moegi-accent); color: #333A32;
+    display: inline-flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; flex: none;
+  }
+  h1.brand { font-size: 26px; display: flex; align-items: center; gap: 12px; }
+  .run-form {
+    background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;
+  }
+  .run-form > div { flex: 1 1 320px; }
+  .run-form select, .run-form input { width: 100%; }
+  select, input[type="date"], input[type="month"] {
+    font: inherit; font-size: 15px; color: var(--ink);
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: 8px; padding: 0 12px; min-height: 44px;
+  }
+  select:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; border-color: var(--focus); }
+  .run-hint { font-size: 12px; color: var(--ink-soft); margin: 8px 0 0; flex-basis: 100%; }
+  .btn-primary { background: var(--moegi); color: var(--moegi-ink); flex: none; }
+  .run-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .run-list li {
+    background: var(--paper-raised); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 14px;
+  }
+  .run-list .run-when { color: var(--ink-soft); font-size: 13px; flex: none; font-variant-numeric: tabular-nums; }
+  .run-list .run-target { font-weight: 600; flex: 1 1 200px; }
+  .run-list a { font-weight: 700; min-height: 44px; display: inline-flex; align-items: center; margin-left: auto; }
+  .chip-progress { background: var(--status-edited-bg); color: var(--status-edited); }
+  .chip-done { background: var(--status-approved-bg); color: var(--status-approved); }
+  .nav-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .nav-card {
+    background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; text-decoration: none; display: flex; flex-direction: column; gap: 2px; min-height: 44px;
+  }
+  .nav-card:hover { background: var(--moegi-soft); border-color: var(--moegi); }
+  .nav-card .nav-icon { font-size: 20px; }
+  .nav-card .nav-name { font-weight: 700; color: var(--ink); }
+  .nav-card .nav-desc { font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+
+  /* ==== ③Before/After比較 ==== */
+  .evidence-note {
+    display: flex; gap: 10px; align-items: baseline;
+    background: var(--moegi-soft); border: 1.5px solid var(--moegi);
+    border-radius: 8px; padding: 12px 16px; font-size: 15px; font-weight: 700;
+    margin-bottom: 24px;
+  }
+  .evidence-note small { font-weight: 400; font-size: 13px; color: var(--ink-soft); }
+  .compare.diff > div { background: var(--paper-raised); border-radius: 12px; padding: 16px; }
+  .compare.diff .after { background: var(--paper-raised); border-color: var(--moegi); font-weight: 400; }
+  .col-head { font-size: 13px; font-weight: 700; color: var(--ink-soft); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .compare.diff .after .col-head { color: var(--moegi-deep); }
+  .check-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+  .check-list li { padding: 8px 12px; border-radius: 6px; border: 1px solid transparent; }
+  .check-list li.hl-mod { background: var(--diff-mod); border-color: var(--diff-mod-border); }
+  .check-list li.hl-add { background: var(--diff-add); border-color: var(--diff-add-border); }
+  .check-list .kind { font-size: 11px; padding: 0 6px; margin-right: 6px; background: var(--paper-raised); border: 1px solid var(--diff-mod-border); color: var(--warn); }
+  .check-list .kind.add { border-color: var(--diff-add-border); color: var(--diff-add-border); background: var(--paper-raised); }
+
+  /* ==== ④日報の入力 ==== */
+  details.run-warning {
+    display: block; background: var(--moegi-soft); border: 1px solid var(--line);
+    border-left: 1px solid var(--line); border-radius: 8px; margin: 0 0 10px; padding: 0;
+  }
+  details.run-warning summary {
+    cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px;
+    min-height: 44px; padding: 4px 14px; font-size: 14px; font-weight: 600;
+  }
+  details.run-warning summary::-webkit-details-marker { display: none; }
+  details.run-warning summary::after {
+    content: "開く"; margin-left: auto; font-size: 12px; font-weight: 400;
+    color: var(--link); flex: none;
+  }
+  details.run-warning[open] summary::after { content: "閉じる"; }
+  details.run-warning .warning-body { padding: 0 14px 12px; font-size: 13px; color: var(--ink-soft); margin: 0; }
+  #nippou-form { background: none; border: 0; border-radius: 0; padding: 0; flex-direction: column; align-items: stretch; gap: 24px; margin-top: 20px; }
+  #nippou-form > div, #nippou-form > fieldset { flex: 1 1 auto; }
+  #nippou-form select, #nippou-form input[type="date"], #nippou-form textarea { font-size: 16px; min-height: 48px; background: var(--paper-raised); }
+  #nippou-form textarea { min-height: 120px; padding: 12px 14px; }
+  fieldset { border: 0; margin: 0; padding: 0; }
+  legend.field-label { padding: 0; }
+  .field-row { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  .procedure-buttons { display: flex; flex-wrap: wrap; gap: 10px; padding: 0; margin: 0; list-style: none; }
+  .procedure-pill { position: relative; }
+  .procedure-pill input {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    opacity: 0; margin: 0; cursor: pointer;
+  }
+  .procedure-pill span {
+    display: inline-flex; align-items: center; gap: 6px;
+    min-height: 44px; padding: 6px 18px;
+    border: 1.5px solid var(--line); border-radius: 999px;
+    background: var(--paper-raised); font-size: 15px; line-height: 1.4;
+  }
+  .procedure-pill span::before {
+    content: ""; width: 14px; height: 14px; flex: none;
+    border: 1.5px solid var(--ink-soft); border-radius: 4px;
+  }
+  .procedure-pill input:checked + span { background: var(--moegi-soft); border-color: var(--moegi); font-weight: 700; }
+  .procedure-pill input:checked + span::before {
+    content: "✓"; border-color: var(--moegi);
+    background: var(--moegi); color: var(--moegi-ink);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+  }
+  .procedure-pill input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .record-controls {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: var(--paper-raised); border: 1px solid var(--line);
+    border-radius: 12px; padding: 16px;
+  }
+  .record-btn {
+    font: inherit; font-size: 16px; font-weight: 700; cursor: pointer;
+    min-height: 48px; padding: 0 24px; border-radius: 999px;
+    border: 1.5px solid var(--moegi); background: var(--paper-raised); color: var(--link);
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .record-btn:hover { background: var(--moegi-soft); color: var(--link); }
+  .record-btn:active { background: var(--moegi-soft); color: var(--link); }
+  .record-btn .rec-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--danger); flex: none; }
+  .record-controls.recording { border-color: var(--danger); background: var(--danger-soft); }
+  .record-controls.recording .record-btn { border-color: var(--danger); color: var(--danger); background: var(--paper-raised); }
+  .record-controls.recording .rec-dot { animation: rec-blink 1.2s ease-in-out infinite; }
+  @keyframes rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+  .record-status { font-size: 14px; color: var(--ink-soft); }
+  .record-controls.recording .record-status { color: var(--danger); font-weight: 700; }
+  .output-options {
+    display: flex; flex-direction: column; gap: 8px;
+    background: var(--paper-raised); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px 16px; font-size: 15px;
+  }
+  .output-options .fixed { color: var(--ink-soft); display: flex; align-items: center; gap: 10px; min-height: 32px; }
+  .output-options label { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+  .output-options input[type="checkbox"] { width: 22px; height: 22px; margin: 0; accent-color: var(--moegi); }
+  .actions.stack { flex-direction: column; align-items: stretch; gap: 8px; }
+  .actions.stack .btn-primary { width: 100%; min-height: 48px; font-size: 17px; }
+
+  /* ==== ⑤⑥ Privacy Gate ==== */
+  .gate-summary {
+    border: 1px solid var(--line); border-radius: 12px;
+    background: var(--paper-raised); padding: 16px; margin-bottom: 12px;
+  }
+  .gate-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .gate-icon { font-size: 20px; flex: none; }
+  .gate-title { font-size: 16px; font-weight: 700; line-height: 1.4; }
+  .gate-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 12px;
+  }
+  .gate-body { font-size: 14px; color: var(--ink-soft); margin: 8px 0 0; }
+  .gate-detect { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .detect-chip {
+    font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 12px;
+    background: var(--paper); border: 1px solid var(--line); color: var(--ink-soft);
+  }
+  .gate-summary.passed { border-color: var(--gate-passed); }
+  .gate-summary.passed .gate-chip { background: var(--gate-passed-bg); color: var(--gate-passed); }
+  .gate-summary.review { border-color: var(--gate-review); background: var(--gate-review-bg); }
+  .gate-summary.review .gate-chip { background: var(--paper-raised); color: var(--gate-review); }
+  .gate-summary.review .gate-body { color: var(--ink); }
+  .gate-summary.blocked, .gate-summary.failed {
+    border-color: var(--gate-blocked-fill);
+    background: var(--gate-blocked-fill); color: #FFFFFF;
+    padding: 20px 16px;
+  }
+  .gate-summary.blocked .gate-icon, .gate-summary.failed .gate-icon { font-size: 24px; }
+  .gate-summary.blocked .gate-title, .gate-summary.failed .gate-title { font-size: 19px; }
+  .gate-summary.blocked .gate-body, .gate-summary.failed .gate-body { color: #FFFFFF; opacity: .92; margin-top: 10px; }
+  .gate-summary.blocked .gate-chip, .gate-summary.failed .gate-chip { background: #FFFFFF; color: var(--gate-blocked-fill); }
+  .gate-summary.blocked .detect-chip, .gate-summary.failed .detect-chip {
+    background: transparent; border-color: rgba(255,255,255,.55); color: #FFFFFF;
+  }
+  .no-send-note {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--ink-soft);
+    padding: 8px 4px; margin-bottom: 24px;
+  }
+  .save-note {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: var(--moegi-soft); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px 16px; font-size: 14px; margin-bottom: 32px;
+  }
+  .save-note a { font-weight: 700; margin-left: auto; min-height: 44px; display: inline-flex; align-items: center; }
+  .speech-text {
+    background: var(--paper-raised); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; font-size: 14px; line-height: 1.9;
+  }
+  .block-reasons {
+    background: var(--paper-raised); border: 1px solid var(--gate-blocked);
+    border-left: 4px solid var(--gate-blocked);
+    border-radius: 0 8px 8px 0; padding: 14px 16px 14px 20px;
+    margin: 0; font-size: 14px;
+  }
+  .block-reasons li { margin: 4px 0; }
+  .block-reasons code {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    background: var(--gate-blocked-bg); color: var(--gate-blocked);
+    border-radius: 4px; padding: 1px 6px;
+  }
+  .tag-note { font-size: 12px; color: var(--ink-soft); margin: 0; }
+  .tag-note code {
+    font-family: ui-monospace, monospace; font-size: 11px;
+    background: var(--moegi-soft); border-radius: 4px; padding: 1px 6px;
+  }
+  .back-link { font-size: 14px; }
+  .back-link a { display: inline-flex; align-items: center; min-height: 44px; }
+
+  /* ==== ⑤ 日報の結果 ==== */
+  .nippou-table { display: flex; flex-direction: column; gap: 8px; }
+  .nippou-row { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+  .nippou-item { font-size: 13px; font-weight: 700; display: block; }
+  .nippou-value { display: flex; align-items: baseline; gap: 10px; margin-top: 2px; font-size: 14px; }
+  .nippou-row.empty .nippou-value { color: var(--ink-soft); }
+  .chip-filled { background: var(--gate-passed-bg); color: var(--gate-passed); }
+  .chip-empty { background: var(--paper); border: 1px solid var(--line); color: var(--ink-soft); }
+  .eval-list, .soap-list { display: flex; flex-direction: column; gap: 8px; }
+  .eval-row, .soap-row { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; font-size: 14px; }
+  .eval-label { font-size: 12px; font-weight: 700; color: var(--ink-soft); display: block; }
+  .soap-key {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 8px; flex: none;
+    background: var(--moegi-soft); color: var(--moegi-deep);
+    font-weight: 700; font-size: 14px; margin-right: 10px;
+  }
+  .soap-row { display: flex; align-items: flex-start; }
+  .soap-row p { margin: 0; }
+
+  /* ==== ⑦ 月報 ==== */
+  .run-warning {
+    display: flex; gap: 10px; align-items: baseline;
+    background: var(--warn-soft); border-left: 4px solid var(--warn-icon);
+    border-radius: 0 8px 8px 0; padding: 10px 16px; margin: 16px 0 0; font-size: 13px;
+    color: var(--ink);
+  }
+  .method-note { font-size: 13px; color: var(--ink-soft); margin: 12px 0 28px; }
+  .stat-chips { display: flex; gap: 12px; flex-wrap: wrap; }
+  .stat-chip {
+    display: inline-flex; align-items: baseline; gap: 8px;
+    background: var(--moegi-soft); border: 1px solid var(--line);
+    border-radius: 999px; padding: 8px 20px; font-size: 14px; font-weight: 600;
+  }
+  .stat-chip strong { font-size: 20px; font-weight: 700; color: var(--moegi-deep); }
+  table {
+    width: 100%; border-collapse: collapse; font-size: 14px;
+    background: var(--paper-raised); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  }
+  th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  thead th { font-size: 12px; font-weight: 700; color: var(--ink-soft); background: var(--paper); }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .rate-cell { display: flex; align-items: center; gap: 12px; }
+  .rate-bar {
+    flex: 1 1 120px; height: 10px; border-radius: 999px;
+    background: var(--paper); border: 1px solid var(--line); overflow: hidden;
+  }
+  .rate-fill { height: 100%; background: var(--moegi); border-radius: 999px; }
+  .rate-bar.zero { background: repeating-linear-gradient(-45deg, var(--paper), var(--paper) 4px, var(--line) 4px, var(--line) 5px); }
+  .rate-num { flex: none; font-variant-numeric: tabular-nums; font-size: 13px; min-width: 84px; text-align: right; }
+  .vital-chart { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+  .vital-chart .chart-title { font-size: 13px; font-weight: 700; margin: 0 0 6px; }
+  .vital-chart svg { width: 100%; height: auto; display: block; }
+  .vital-chart .chart-note { font-size: 12px; color: var(--ink-soft); margin: 6px 0 0; }
+  .table-scroll { overflow-x: auto; }
+  .table-scroll table { min-width: 560px; }
+
+  /* ==== ⑧ 配信キュー ==== */
+  .pending-summary {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--warn-soft); border: 1.5px solid var(--warn-icon);
+    border-radius: 12px; padding: 16px 20px; margin-bottom: 8px;
+  }
+  .pending-summary .count { font-size: 32px; font-weight: 700; color: var(--warn); line-height: 1; }
+  .pending-summary .desc { font-size: 14px; }
+  .pending-summary .desc strong { display: block; font-size: 15px; }
+  .auto-note { font-size: 13px; color: var(--ink-soft); margin: 0 0 24px; }
+  .delivery-grid li {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 4px 16px; align-items: center;
+    padding: 12px 16px;
+  }
+  .delivery-grid li.pending { border-left: 4px solid var(--warn-icon); }
+  .delivery-grid .chip { justify-self: end; }
+  .chip-sent { background: var(--status-approved-bg); color: var(--status-approved); }
+  .chip-queued { background: var(--warn-soft); color: var(--warn); }
+  .delivery-when { font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .delivery-meta { grid-column: 1 / -1; font-size: 12px; color: var(--ink-soft); }
+
+  /* ==== ⑨ 監査記録 ==== */
+  .audit { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; }
+  .audit-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 14px; }
+  .audit-when { color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .chip-gate-passed  { background: var(--gate-passed-bg); color: var(--gate-passed); }
+  .chip-gate-review  { background: var(--gate-review-bg); color: var(--gate-review); }
+  .chip-gate-blocked { background: var(--gate-blocked-bg); color: var(--gate-blocked); }
+  .chip-gate-failed  { background: var(--gate-failed-bg); color: var(--gate-failed); }
+  .audit-detects { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .audit-meta { display: flex; gap: 6px 20px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: var(--ink-soft); }
+  .audit-meta strong { color: var(--ink); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rec-dot, .progress-state::before, .spinner { animation: none !important; }
+  }
   @media (max-width: 600px) {
     body { font-size: 16px; }
     main { padding: 16px 16px 64px; }
     .proposal { padding: 18px 16px; }
     .diff { grid-template-columns: 1fr; }
     .actions button { flex: 1 1 40%; }
+    .actions.stack button { flex: 1 1 auto; }
+    .run-form > div { flex-basis: 100%; }
+    .run-form .btn-primary { width: 100%; min-height: 48px; }
+    .nav-cards { grid-template-columns: 1fr 1fr; }
+    .run-list a { margin-left: 0; }
+    .stat-chips { flex-direction: column; }
+    .stat-chip { justify-content: space-between; display: flex; }
+    .rate-num { min-width: 72px; }
+    .delivery-grid li { grid-template-columns: 1fr auto; }
+  }
+  @media (min-width: 601px) {
+    .field-row { grid-template-columns: 1fr 1fr; }
+    .nippou-row { display: grid; grid-template-columns: 260px 1fr; gap: 12px; align-items: baseline; }
+    .nippou-item { font-weight: 600; }
+    .nippou-value { margin-top: 0; }
+    .actions.stack .btn-primary { width: auto; align-self: flex-start; min-width: 280px; }
+    .actions.stack .progress-state { align-self: stretch; }
   }
 </style>
 """
@@ -387,9 +738,12 @@ def _render_page(body: str) -> HTMLResponse:
 def index() -> HTMLResponse:
     conn = _db_conn()
     try:
+        # handoff §①: 過去の実行に「承認待ちn件／完了（n件承認）」チップと実行日時を出す
         past_runs = conn.execute(
             """
-            SELECT proposals.run_id, MIN(changes.label), MIN(changes.kind)
+            SELECT proposals.run_id, MIN(changes.label), MIN(changes.kind),
+                   SUM(proposals.status = '未承認'),
+                   SUM(proposals.status IN ('承認', '編集済'))
             FROM proposals
             JOIN impacts ON impacts.row_id = proposals.impact_row_id
             JOIN changes ON changes.row_id = impacts.change_row_id
@@ -398,6 +752,11 @@ def index() -> HTMLResponse:
             LIMIT 20
             """
         ).fetchall()
+        run_started_at = dict(
+            conn.execute(
+                "SELECT run_id, MIN(created_at) FROM cost_records GROUP BY run_id"
+            ).fetchall()
+        )
     finally:
         conn.close()
 
@@ -407,42 +766,64 @@ def index() -> HTMLResponse:
         for t in targets
     )
 
-    run_list = (
-        "<ul class='run-list'>"
-        + "".join(
-            f"<li><a href='/runs/{html.escape(run_id)}'>対象条文 {html.escape(label)}（{html.escape(kind)}）</a>"
-            f" <span class='meta'>{html.escape(run_id[:8])}</span></li>"
-            for run_id, label, kind in past_runs
-        )
-        + "</ul>"
-        if past_runs
-        else "<p>まだ分析結果がありません。下のフォームから実行してください。</p>"
-    )
+    if past_runs:
+        items = []
+        for run_id, label, kind, pending_count, approved_count in past_runs:
+            when = html.escape((run_started_at.get(run_id) or "")[:16])
+            if pending_count:
+                chip = f"<span class='chip chip-progress'>承認待ち {pending_count}件</span>"
+                link_text = "更新案を見る →"
+            else:
+                chip = f"<span class='chip chip-done'>完了（{approved_count}件承認）</span>"
+                link_text = "結果を見る →"
+            items.append(
+                f"<li><span class='run-when'>{when}</span>"
+                f"<span class='run-target'>対象条文 {html.escape(label)}（{html.escape(kind)}）</span>"
+                f"{chip}<a href='/runs/{html.escape(run_id)}'>{link_text}</a></li>"
+            )
+        run_list = "<ul class='run-list'>" + "".join(items) + "</ul>"
+    else:
+        run_list = """
+        <div class="empty-state">
+          <span class="empty-icon">🌱</span>
+          <p><strong>まだ分析結果がありません</strong></p>
+          <p>上のフォームから対象条文を選んで、最初の分析を実行してください。</p>
+        </div>"""
 
-    # 実機で確認済み: 単発モードのローカルLLM実行は項目により1〜4分かかる（design.md §6.2）。
-    # 進行表示が無いと固まって見え「落ちた」と誤認されるため、送信後にボタンを無効化して
-    # 実行中である旨を明示する（素のJS・CDN依存なし＝design.md §14）。
     body = f"""
-    <h1>MOEGI 承認UI</h1>
-    <h2>新しい分析を実行</h2>
-    <p class="run-warning">⚠️ クラウドLLM（ORCA）を使うため<strong>1分弱</strong>かかります（実測47秒・N-11以降）。
-    クラウド呼び出しが失敗した場合のみローカルへ自動フォールバックし、その場合は数分かかります。
-    実行中はタブを閉じずにお待ちください。</p>
-    <form class="run-form" method="post" action="/runs" onsubmit="
-      this.querySelector('button').disabled = true;
-      this.querySelector('button').textContent = '実行中…';
-    ">
-      <label for="label-select">対象条文</label>
-      <select id="label-select" name="label">{label_options}</select>
-      <button type="submit">パイプラインを実行</button>
-    </form>
-    <h2>過去の実行</h2>
-    {run_list}
-    <h2>日報エージェント</h2>
-    <p><a href="/nippou">日報・SOAPの文字起こし→仮名化→構造化を試す</a>（design.md §6.5・要配慮個人情報のためローカル固定）</p>
-    <p><a href="/monthly">月報（1ヶ月分の日報を集計）</a>（ledger R-84・LLM不使用の決定論的な集計）</p>
-    <p><a href="/privacy/audits">仮名化処理の監査記録</a>（design/moegi/privacy.md §10）</p>
-    <p><a href="/deliveries">配信キュー</a>（design.md G8・キュー型チャネル・回線復帰で自動送信）</p>
+    <h1 class="brand"><span class="brand-mark">萌</span>MOEGI</h1>
+    <p class="page-sub">通達の改定をチェックリストに反映し、承認された変更を現場の記録まで届けます。</p>
+
+    <section>
+      <h2>新しい分析を実行</h2>
+      <form class="run-form" method="post" action="/runs" onsubmit="this.classList.add('is-submitting')">
+        <div>
+          <label class="field-label" for="label-select">対象条文</label>
+          <select id="label-select" name="label">{label_options}</select>
+        </div>
+        <button type="submit" class="btn-primary">分析を実行</button>
+        <div class="progress-state" role="status">
+          <span class="spinner"></span>
+          <span>更新案を生成中… <small>1分ほどかかる場合があります。画面を閉じないでください。</small></span>
+        </div>
+        <p class="run-hint">改定条文と現行チェックリストを突き合わせ、更新案を生成します（約47秒。クラウド呼び出しが失敗した場合のみローカルへ自動フォールバックし、その場合は数分かかります）。</p>
+      </form>
+    </section>
+
+    <section>
+      <h2>過去の実行</h2>
+      {run_list}
+    </section>
+
+    <section>
+      <h2>機能</h2>
+      <div class="nav-cards">
+        <a class="nav-card" href="/nippou"><span class="nav-icon">🎙</span><span class="nav-name">日報の入力</span><span class="nav-desc">音声・テキストから日報とSOAPを作成</span></a>
+        <a class="nav-card" href="/monthly"><span class="nav-icon">📊</span><span class="nav-name">月報</span><span class="nav-desc">1ヶ月分の日報を集計</span></a>
+        <a class="nav-card" href="/privacy/audits"><span class="nav-icon">🔎</span><span class="nav-name">監査記録</span><span class="nav-desc">仮名化処理の記録を確認</span></a>
+        <a class="nav-card" href="/deliveries"><span class="nav-icon">📮</span><span class="nav-name">配信キュー</span><span class="nav-desc">承認済み変更の配信状況</span></a>
+      </div>
+    </section>
     """
     return _render_page(body)
 
@@ -760,34 +1141,48 @@ def edit_proposal(proposal_row_id: int, after: str = Form(...)) -> RedirectRespo
 
 
 def _nippou_record_html(record: nippou.NippouRecord) -> str:
-    rows = "".join(
-        f"<tr><th>{html.escape(item.checklist_item_id)}</th>"
-        f"<td><span class='chip {'status-chip' if not item.filled else ''}'>"
-        f"{'記入済み' if item.filled else '未記入'}</span> {html.escape(item.value)}</td></tr>"
-        for item in record.items
-    )
+    """日報の構造化結果（handoff §⑤: モバイル縦2段カード・600px以上で2カラムgrid）。"""
+    rows = []
+    if record.procedures:
+        procedures = "、".join(record.procedures)
+        rows.append(
+            "<div class='nippou-row'>"
+            "<span class='nippou-item'>処置内容（ボタン選択）</span>"
+            f"<span class='nippou-value'><span class='chip chip-filled'>✓ 記入済み</span>{html.escape(procedures)}</span></div>"
+        )
+    for item in record.items:
+        if item.filled:
+            rows.append(
+                "<div class='nippou-row'>"
+                f"<span class='nippou-item'>{html.escape(item.checklist_item_id)}</span>"
+                f"<span class='nippou-value'><span class='chip chip-filled'>✓ 記入済み</span>{html.escape(item.value)}</span></div>"
+            )
+        else:
+            rows.append(
+                "<div class='nippou-row empty'>"
+                f"<span class='nippou-item'>{html.escape(item.checklist_item_id)}</span>"
+                "<span class='nippou-value'><span class='chip chip-empty'>－ 未記入</span>発話から読み取れませんでした</span></div>"
+            )
+
     evaluation_html = ""
     if record.evaluation:
         ev = record.evaluation
         evaluation_html = f"""
-        <h3>評価（design.md §6.5・評価の記録）</h3>
-        <table>
-          <tr><th>看護目標（goal_ref）</th><td>{html.escape(ev.goal_ref or '（参照なし）')}</td></tr>
-          <tr><th>達成の程度（achievement）</th><td>{html.escape(ev.achievement)}</td></tr>
-          <tr><th>効果（effect）</th><td>{html.escape(ev.effect or '（記載なし）')}</td></tr>
-          <tr><th>ステータス</th><td><span class="chip status-chip">{'記入済み' if ev.filled else '未記入'}</span></td></tr>
-        </table>
-        """
-    procedures_html = (
-        "<p class='meta'>処置内容の選択はありません。</p>"
-        if not record.procedures
-        else "<p>" + "".join(f"<span class='chip'>{html.escape(p)}</span> " for p in record.procedures) + "</p>"
-    )
+    <section>
+      <h2>評価</h2>
+      <div class="eval-list">
+        <div class="eval-row"><span class="eval-label">看護目標</span>{html.escape(ev.goal_ref or '（参照なし）')}</div>
+        <div class="eval-row"><span class="eval-label">達成度</span>{html.escape(ev.achievement)}</div>
+        <div class="eval-row"><span class="eval-label">効果</span>{html.escape(ev.effect or '（記載なし）')}</div>
+      </div>
+    </section>"""
+
     return f"""
-    <h2>構造化結果（utterance_id={html.escape(record.utterance_id)}）</h2>
-    <h3>処置内容（ボタン選択・ledger R-77）</h3>
-    {procedures_html}
-    <table style="width:100%; border-collapse: collapse;">{rows}</table>
+    <section>
+      <h2>日報</h2>
+      <div class="nippou-table">{"".join(rows)}</div>
+      <p class="section-hint">未記入の項目は月報作成前に追記できます。</p>
+    </section>
     {evaluation_html}
     """
 
@@ -795,54 +1190,82 @@ def _nippou_record_html(record: nippou.NippouRecord) -> str:
 @app.get("/nippou", response_class=HTMLResponse)
 def nippou_form() -> HTMLResponse:
     procedure_checkboxes = "".join(
-        f"<label class='procedure-pill'><input type='checkbox' name='procedures' value='{html.escape(p)}'>"
-        f"{html.escape(p)}</label>"
+        f"<li class='procedure-pill'><input type='checkbox' name='procedures' value='{html.escape(p)}'>"
+        f"<span>{html.escape(p)}</span></li>"
         for p in _PROCEDURE_OPTIONS
     )
     body = f"""
-    <h1>日報エージェント（design.md §6.5）</h1>
-    <p class="run-warning">⚠️ 要配慮個人情報を扱うため常にローカル（gemma4:26b）で処理します（ledger N-11）。
-    訪問時の移動中、または現場での録音許可が取れている場合はマイクボタンで録音してください
-    （ledger R-80）。電波が無い場所でも録音自体はでき、あとで構造化できます。</p>
-    <p class="run-warning">🔒 文字起こしのあと、日報・SOAPを作る前に<strong>仮名化・安全検査（Privacy Gate）</strong>を
-    通します（現在のモード: <strong>{html.escape(PRIVACY_CONFIG.mode)}</strong>）。
-    氏名・電話番号・住所・生年月日などの直接識別子を仮名へ置換し、検査に通らなかった場合は
-    構造化へ進まず確認画面を出します。この処理では外部LLMへの送信は行われません。
-    <a href="/privacy/audits">監査記録を見る</a></p>
+    <h1>日報の入力</h1>
 
-    <form method="post" action="/nippou/structure" enctype="multipart/form-data" id="nippou-form">
-      <label for="subject-code">利用者コード（ledger R-84: 月報の集計単位。LLMに同定させず選択式で確定する）</label>
-      <div class="run-form">
-        <select id="subject-code" name="subject_code">{_patient_code_options()}</select>
-        <label for="visited-on">訪問日</label>
-        <input type="date" id="visited-on" name="visited_on" value="{date.today().isoformat()}">
+    <details class="run-warning">
+      <summary>🖥 音声とテキストは、この端末とローカルサーバーの中で処理されます</summary>
+      <p class="warning-body">録音した音声・入力したテキストは事業所内のサーバーで文字起こし・構造化され、
+      外部のクラウドサービスには送信されません（gemma4:26b・ledger N-11）。電波が無い場所でも録音自体はでき、
+      あとで構造化できます。</p>
+    </details>
+    <details class="run-warning">
+      <summary>🔎 保存の前に Privacy Gate の検査を通ります</summary>
+      <p class="warning-body">構造化の前に、氏名・電話番号などの直接識別子を機械的に検出して仮名化します
+      （現在のモード: {html.escape(PRIVACY_CONFIG.mode)}）。仮名化後も病状・服薬などの要配慮個人情報は残るため、
+      結果画面で内容を確認してください。記録に残せない情報（保険証番号など）を検出した場合、処理は停止します。
+      <a href="/privacy/audits">監査記録を見る</a></p>
+    </details>
+
+    <form method="post" action="/nippou/structure" enctype="multipart/form-data" id="nippou-form"
+          class="run-form" onsubmit="this.classList.add('is-submitting')">
+      <div class="field-row">
+        <div>
+          <label class="field-label" for="subject-code">利用者コード</label>
+          <select id="subject-code" name="subject_code">{_patient_code_options()}</select>
+        </div>
+        <div>
+          <label class="field-label" for="visited-on">訪問日</label>
+          <input type="date" id="visited-on" name="visited_on" value="{date.today().isoformat()}">
+        </div>
       </div>
 
-      <label>処置内容（複数選択可・ledger R-77: LLMではなくボタン選択で確定）</label>
-      <div class="procedure-buttons">{procedure_checkboxes}</div>
+      <fieldset>
+        <legend class="field-label">処置内容（当てはまるものをすべて選択）</legend>
+        <ul class="procedure-buttons">{procedure_checkboxes}</ul>
+      </fieldset>
 
-      <label>出力形式</label>
-      <div class="procedure-buttons">
-        <span class="procedure-pill">日報（チェックリスト照合）— 常に作成</span>
-        <label class="procedure-pill"><input type="checkbox" name="soap" checked>SOAP形式でも記録する</label>
-      </div>
-
-      <label>録音</label>
-      <div class="record-controls">
-        <button type="button" id="record-btn">🎙 録音開始</button>
-        <span id="record-status" class="meta"></span>
+      <div>
+        <span class="field-label">音声で記録</span>
+        <div class="record-controls" id="record-controls">
+          <button type="button" class="record-btn" id="record-btn"><span class="rec-dot"></span><span id="record-btn-label">録音を開始</span></button>
+          <span class="record-status" id="record-status">待機中（タップで録音開始）</span>
+        </div>
+        <p class="field-hint">録音中はボタンが赤枠に変わり、●が点滅します。もう一度タップで停止。</p>
       </div>
       <input type="file" name="audio" id="audio-input" accept="audio/*" style="display:none">
 
-      <label for="utterance_text">またはテキストで直接入力</label>
-      <textarea id="utterance_text" name="utterance_text" rows="4" style="width:100%"
-        placeholder="訪問終了しました。血圧128の78、体温36.5度、脈拍70、呼吸数16でした。特記事項はありません。"></textarea>
+      <div>
+        <label class="field-label" for="utterance_text">またはテキストで直接入力</label>
+        <textarea id="utterance_text" name="utterance_text"
+          placeholder="例: PATIENT_001さん、血圧128の76、体温36.5度。左踵の褥瘡はサイズ縮小。長女さんに服薬の説明を実施。"></textarea>
+      </div>
 
-      <button type="submit">構造化する</button>
+      <div>
+        <span class="field-label">出力形式</span>
+        <div class="output-options">
+          <span class="fixed">📄 日報 — 常に作成されます</span>
+          <label><input type="checkbox" name="soap" checked> SOAP（S/O/A/P）も作成する</label>
+        </div>
+      </div>
+
+      <div class="actions stack">
+        <button type="submit" class="btn-primary">構造化する</button>
+        <div class="progress-state" role="status">
+          <span class="spinner"></span>
+          <span>構造化を実行中… <small>30秒ほどかかる場合があります。画面を閉じないでください。</small></span>
+        </div>
+      </div>
     </form>
     <script>
     (function() {{
       var recordBtn = document.getElementById('record-btn');
+      var recordBtnLabel = document.getElementById('record-btn-label');
+      var recordControls = document.getElementById('record-controls');
       var statusEl = document.getElementById('record-status');
       var audioInput = document.getElementById('audio-input');
       var mediaRecorder = null;
@@ -892,19 +1315,17 @@ def nippou_form() -> HTMLResponse:
             dt.items.add(file);
             audioInput.files = dt.files;
             stream.getTracks().forEach(function(t) {{ t.stop(); }});
-            recordBtn.textContent = '🎙 録音開始';
+            recordControls.classList.remove('recording');
+            recordBtnLabel.textContent = '録音を開始';
             statusEl.textContent = '録音完了。内容を確認したら「構造化する」を押してください。';
           }};
           mediaRecorder.start();
-          recordBtn.textContent = '⏹ 録音停止';
-          statusEl.textContent = '録音中…';
+          recordControls.classList.add('recording');
+          recordBtnLabel.textContent = '録音を停止';
+          statusEl.textContent = '録音中（タップで停止）';
         }}).catch(function(err) {{
           statusEl.textContent = 'マイクを使用できませんでした: ' + err.message;
         }});
-      }});
-
-      document.getElementById('nippou-form').addEventListener('submit', function() {{
-        this.querySelector('button[type=submit]').disabled = true;
       }});
     }})();
     </script>
@@ -915,34 +1336,57 @@ def nippou_form() -> HTMLResponse:
 def _soap_record_html(record: nippou.SoapRecord) -> str:
     if record.undecidable:
         return (
-            "<h2>SOAP形式</h2>"
-            "<p class='run-warning'>ローカルLLMがSOAP構造化を完了できませんでした（判定不能）。"
-            "内容を確認して、もう一度お試しください。</p>"
+            "<section><h2>SOAP</h2>"
+            "<div class='run-warning'>⚠️ <span>ローカルLLMがSOAP構造化を完了できませんでした（判定不能）。"
+            "内容を確認して、もう一度お試しください。</span></div></section>"
         )
     rows = "".join(
-        f"<tr><th style='text-align:left; vertical-align:top; white-space:nowrap; padding:0.3rem 0.8rem 0.3rem 0;'>{label}</th>"
-        f"<td style='padding:0.3rem 0;'>{html.escape(value) if value else '<span class=\"meta\">（該当する記載なし）</span>'}</td></tr>"
-        for label, value in (
-            ("S（主観的情報）", record.subjective),
-            ("O（客観的情報）", record.objective),
-            ("A（アセスメント）", record.assessment),
-            ("P（計画）", record.plan),
+        f"<div class='soap-row'><span class='soap-key'>{key}</span>"
+        + (f"<p>{html.escape(value)}</p>" if value else "<p class='meta'>（該当する記載なし）</p>")
+        + "</div>"
+        for key, value in (
+            ("S", record.subjective),
+            ("O", record.objective),
+            ("A", record.assessment),
+            ("P", record.plan),
         )
     )
     return f"""
-    <h2>SOAP形式（utterance_id={html.escape(record.utterance_id)}）</h2>
-    <table style="width:100%; border-collapse: collapse;">{rows}</table>
+    <section>
+      <h2>SOAP</h2>
+      <div class="soap-list">{rows}</div>
+    </section>
     """
 
 
-#: Privacy Gate の状態 → 画面表示（design/moegi/privacy.md §12）。
-#: 「匿名化済み」「完全に安全」とは書かない——仮名化後も要配慮個人情報は残る。
+#: Privacy Gate の状態 → 表示クラス・アイコン・見出し（handoff §⑤⑥）。
+#: blocked/failed だけが赤塗りバナー（ページ内唯一の赤塗り）。failed は ❓ で区別する。
+_GATE_VIEWS = {
+    privacy.PrivacyGateStatus.PASSED: ("passed", "🔎", "Privacy Gate: 検査通過"),
+    privacy.PrivacyGateStatus.REVIEW_REQUIRED: ("review", "⚠️", "Privacy Gate: 確認が必要です"),
+    privacy.PrivacyGateStatus.BLOCKED: ("blocked", "⛔", "Privacy Gate: 処理を停止しました"),
+    privacy.PrivacyGateStatus.FAILED: ("failed", "❓", "Privacy Gate: 検査を完了できませんでした"),
+    privacy.PrivacyGateStatus.PENDING: ("review", "⚠️", "Privacy Gate: 検査中です"),
+}
+
+#: 状態ごとの本文（handoff の文言。「匿名化済み」「完全に安全」とは書かない）。
 _GATE_MESSAGES = {
-    privacy.PrivacyGateStatus.PASSED: "直接識別子を仮名化しました。仮名化後も病状・服薬などの要配慮個人情報は残ります。",
-    privacy.PrivacyGateStatus.REVIEW_REQUIRED: "個人を特定し得る情報が残っている可能性があります。候補を確認してから処理を続けてください。",
-    privacy.PrivacyGateStatus.BLOCKED: "セキュリティ検査で停止しました。記録に残してはいけない情報（保険証番号・認証情報など）が含まれています。",
-    privacy.PrivacyGateStatus.FAILED: "セキュリティ検査を完了できませんでした。処理を中止しました。",
-    privacy.PrivacyGateStatus.PENDING: "セキュリティ検査中です。",
+    privacy.PrivacyGateStatus.PASSED: (
+        "直接識別子を仮名化しました。仮名化後も病状・服薬などの要配慮個人情報は残ります。"
+        "内容を確認してから共有してください。"
+    ),
+    privacy.PrivacyGateStatus.REVIEW_REQUIRED: (
+        "個人を特定し得る情報が残っている可能性があります。下記の検出結果を確認し、"
+        "修正してから再検査してください。"
+    ),
+    privacy.PrivacyGateStatus.BLOCKED: (
+        "記録に残せない情報を検出したため、構造化を中止しました。日報・SOAPは保存されていません。"
+    ),
+    privacy.PrivacyGateStatus.FAILED: (
+        "検査自体が完了しなかったため、構造化を中止しました。データは保存されていません。"
+        "時間をおいて再度お試しください。"
+    ),
+    privacy.PrivacyGateStatus.PENDING: "検査中です。",
 }
 
 #: 停止・確認の理由コード → 現場向けの日本語（値そのものは決して出さない）。
@@ -1003,40 +1447,63 @@ def _reason_text(code: str) -> str:
 
 
 def _gate_summary_html(result: privacy.GateResult) -> str:
-    """検出サマリ・Privacy Gate状態・外部送信の有無を表示する（§12）。
+    """Privacy Gate サマリ（handoff §⑤⑥: 同一コンポーネントの状態違い）。
 
     検出した「値」は出さず、種別と件数だけを出す。権限のない利用者に元の値を
     見せないための最低条件で、画面に出さないものは画面から漏れない。
     """
-    counts = (
-        "".join(
-            f"<span class='chip'>{html.escape(_detection_type_label(t))} {n}件</span> "
-            for t, n in sorted(result.detected_counts.items())
-        )
-        or "<span class='meta'>検出はありませんでした。</span>"
+    css, icon, title = _GATE_VIEWS[result.status]
+    detects = "".join(
+        f"<span class='detect-chip'>{html.escape(_detection_type_label(t))} {n}件</span>"
+        for t, n in sorted(result.detected_counts.items())
     )
-    reasons = (
-        "<ul>" + "".join(f"<li>{html.escape(_reason_text(c))}</li>" for c in result.reason_codes) + "</ul>"
-        if result.reason_codes
-        else ""
-    )
+    detects_html = f"<div class='gate-detect'>{detects}</div>" if detects else ""
     shadow_note = ""
     if result.mode != "enforce" and result.would_block:
         shadow_note = (
-            "<p class='run-warning'>⚠️ 段階導入モード"
+            "<div class='run-warning'>⚠️ <span>段階導入モード"
             f"（{html.escape(result.mode)}）のため処理を継続しました。"
-            "本番（enforce）ではここで停止します。</p>"
+            "本番（enforce）ではここで停止します。</span></div>"
         )
+    role = " role='alert'" if css in ("blocked", "failed") else ""
     return f"""
-    <div class="proposal">
-      <div class="meta">Privacy Gate ・ request_id {html.escape(result.request_id[:8])} ・
-        ポリシー {html.escape(result.policy_version)} ・ モード {html.escape(result.mode)}</div>
-      <p><strong>{html.escape(_GATE_MESSAGES[result.status])}</strong></p>
-      <div class="chips">{counts}</div>
-      {reasons}
-      {shadow_note}
-      <p class="meta">この処理では外部LLMへの送信は行われていません（仮名化・構造化ともローカル実行）。</p>
+    <div class="gate-summary {css}"{role}>
+      <div class="gate-head">
+        <span class="gate-icon">{icon}</span>
+        <span class="gate-title">{html.escape(title)}</span>
+        <span class="gate-chip">{html.escape(result.status.value)}</span>
+      </div>
+      <p class="gate-body">{html.escape(_GATE_MESSAGES[result.status])}</p>
+      {detects_html}
+      <p class="gate-body"><small>request_id {html.escape(result.request_id[:8])} ・
+        ポリシー {html.escape(result.policy_version)} ・ モード {html.escape(result.mode)}</small></p>
     </div>
+    <p class="no-send-note">🔒 外部LLMへの送信は行われていません（仮名化・構造化ともローカル実行）。</p>
+    {shadow_note}
+    """
+
+
+def _block_reasons_html(result: privacy.GateResult) -> str:
+    """停止・確認の理由（handoff §⑥）。コード名も併記して問い合わせ時に特定できるようにする。"""
+    if not result.reason_codes:
+        return ""
+    title = (
+        "停止した理由"
+        if result.status in (privacy.PrivacyGateStatus.BLOCKED, privacy.PrivacyGateStatus.FAILED)
+        else "確認が必要な理由"
+    )
+    items = "".join(
+        f"<li>{html.escape(_reason_text(code))}（<code>{html.escape(code)}</code>）</li>"
+        for code in result.reason_codes
+    )
+    return f"""
+    <section>
+      <h2>{title}</h2>
+      <ul class="block-reasons">
+        {items}
+        <li>検出した値そのものは表示・保存されず、種別と件数のみを記録しています</li>
+      </ul>
+    </section>
     """
 
 
@@ -1051,14 +1518,27 @@ def _recheck_form_html(sanitized_text: str, context: "_RecordContext") -> str:
     hidden += f"<input type='hidden' name='subject_code' value='{html.escape(context.subject_code)}'>"
     hidden += f"<input type='hidden' name='visited_on' value='{html.escape(context.visited_on)}'>"
     return f"""
+    <section>
     <h2>修正して再検査</h2>
-    <p class="meta">残っている個人情報を手で消してから再検査してください。ここに表示されているのは
-      仮名化済みのテキストです（元の値は表示されません）。</p>
-    <form class="edit-form" method="post" action="/nippou/recheck">
+    <form class="edit-form" method="post" action="/nippou/recheck"
+          onsubmit="this.classList.add('is-submitting')">
       {hidden}
-      <textarea name="sanitized_text" rows="6">{html.escape(sanitized_text)}</textarea>
-      <button type="submit">修正して再検査する</button>
+      <p class="field-hint">下のテキストは直接識別子を仮名化した内容です。検出された箇所とその前後の
+        言い回しを、その情報に触れない表現に書き直してから再検査してください（元の値は表示されません）。</p>
+      <label class="field-label" for="retry-text">仮名化済みテキスト</label>
+      <textarea id="retry-text" name="sanitized_text" rows="6">{html.escape(sanitized_text)}</textarea>
+      <p class="tag-note">タグの意味: <code>[[INSURANCE_NUMBER]]</code> 保険証番号 ／
+        <code>[[PHONE]]</code> 電話番号 ／ <code>[[ADDRESS]]</code> 住所 ／ <code>[[EMAIL]]</code> メールアドレス</p>
+      <div class="actions stack">
+        <button type="submit" class="btn-primary">修正して再検査</button>
+        <div class="progress-state" role="status">
+          <span class="spinner"></span>
+          <span>再検査を実行中… <small>30秒ほどかかる場合があります。画面を閉じないでください。</small></span>
+        </div>
+      </div>
     </form>
+    </section>
+    <p class="back-link"><a href="/nippou">← 日報の入力からもう一度試す</a></p>
     """
 
 
@@ -1152,11 +1632,14 @@ def _structure_and_render(result: privacy.GateResult, context: _RecordContext) -
     cleared_for_downstream() が False の場合、agent.structure() /
     structure_soap() を一切呼ばず、日報の保存も行わずに戻る（fail-closed）。
     """
-    header = "<h1>日報エージェント（design.md §6.5）</h1><p><a href='/nippou'>← もう一度試す</a></p>"
-
     if not privacy.cleared_for_downstream(result):
         _save_privacy_audit(result, proceeded=False)
-        body = header + _gate_summary_html(result) + _recheck_form_html(result.sanitized_text, context)
+        # handoff §⑥: 停止画面は見出しを置かず、赤塗りバナーを最上部に据える
+        body = (
+            _gate_summary_html(result)
+            + _block_reasons_html(result)
+            + _recheck_form_html(result.sanitized_text, context)
+        )
         return _render_page(body)
 
     sitedoc = pipeline.load_sitedoc()
@@ -1182,25 +1665,30 @@ def _structure_and_render(result: privacy.GateResult, context: _RecordContext) -
     saved = _save_nippou_record(result, context, record, soap)
 
     if saved:
+        what = "日報とSOAP" if soap is not None else "日報"
         saved_html = (
-            f"<p class='meta'>この記録を利用者 {html.escape(context.subject_code)} の"
-            f" {html.escape(context.visited_on)} の日報として保存しました。"
-            f"<a href='/monthly'>月報を見る</a></p>"
+            f"<div class='save-note'>✓ {what}を保存しました"
+            f"（利用者 {html.escape(context.subject_code)} ・ {html.escape(context.visited_on)}）。"
+            f"<a href='/monthly'>月報を見る →</a></div>"
         )
     else:
         saved_html = (
-            "<p class='run-warning'>⚠️ 利用者コードが選ばれていないため、この記録は保存していません"
-            "（月報の集計に入りません）。</p>"
+            "<div class='run-warning'>⚠️ <span>利用者コードが選ばれていないため、この記録は保存していません"
+            "（月報の集計に入りません）。</span></div>"
         )
 
+    subject = html.escape(context.subject_code) if context.subject_code else "（利用者コード未選択）"
     body = (
-        header
+        "<h1>日報の結果</h1>"
+        f"<p class='page-sub'>{subject} ・ 訪問日 {html.escape(context.visited_on)}</p>"
         + _gate_summary_html(result)
         + saved_html
-        + "<h2>発話内容（仮名化済み）</h2>"
-        + f"<p class='trace-text'>{html.escape(result.sanitized_text)}</p>"
+        + "<section><h2>仮名化済みの発話内容</h2>"
+        + f"<div class='speech-text'>{_highlight_pseudonyms(result.sanitized_text)}</div>"
+        + "<p class='section-hint'>ハイライト部分が仮名化された箇所です。</p></section>"
         + _nippou_record_html(record)
         + (_soap_record_html(soap) if soap is not None else "")
+        + "<p class='back-link'><a href='/nippou'>← もう一度入力する</a></p>"
     )
     return _render_page(body)
 
@@ -1283,33 +1771,79 @@ _SAMPLE_UTTERANCE = (
 )
 
 
-def _checklist_items_html(items: list[pipeline.ChecklistItem], highlight: set[str]) -> str:
-    return "<ol>" + "".join(
-        (
-            f"<li><mark>{html.escape(i.label)}</mark>"
-            if i.label in highlight
-            else f"<li>{html.escape(i.label)}"
+def _check_list_html(
+    items: list[pipeline.ChecklistItem], *, modified: set[str], added: set[str]
+) -> str:
+    """handoff §③: 変更点は色（hl-mod/hl-add）＋記号（変/＋）の併用で示す。"""
+    rows = []
+    for item in items:
+        if item.label in added:
+            rows.append(
+                f"<li class='hl-add'><span class='kind add'>＋</span>{html.escape(item.label)}</li>"
+            )
+        elif item.label in modified:
+            rows.append(
+                f"<li class='hl-mod'><span class='kind mod'>変</span>{html.escape(item.label)}</li>"
+            )
+        else:
+            rows.append(f"<li>{html.escape(item.label)}</li>")
+    return "<ul class='check-list'>" + "".join(rows) + "</ul>"
+
+
+def _compare_record_html(record: nippou.NippouRecord, highlight_items: set[str]) -> str:
+    """構造化結果の片側。変更後にだけ現れた項目（G6の落ち）は hl-add で目立たせる。"""
+    rows = []
+    for item in record.items:
+        hl = " style='background:var(--diff-add); border-color:var(--diff-add-border);'" if (
+            item.checklist_item_id in highlight_items
+        ) else ""
+        chip = (
+            "<span class='chip chip-filled'>✓ 記入</span>"
+            if item.filled
+            else "<span class='chip chip-empty'>－ 未記入</span>"
         )
-        + (f" <span class='meta'>（看護目標: {html.escape(i.goal_ref)}）</span>" if i.goal_ref else "")
-        + "</li>"
-        for i in items
-    ) + "</ol>"
+        value = html.escape(item.value) if item.value else "—"
+        rows.append(
+            f"<div class='nippou-row{' empty' if not item.filled else ''}'{hl}>"
+            f"<span class='nippou-item'>{html.escape(item.checklist_item_id)}</span>"
+            f"<span class='nippou-value'>{chip}{value}</span></div>"
+        )
+    if record.evaluation is not None:
+        ev = record.evaluation
+        chip = (
+            "<span class='chip chip-filled'>✓ 記入</span>"
+            if ev.filled
+            else "<span class='chip chip-empty'>－ 未記入</span>"
+        )
+        rows.append(
+            "<div class='nippou-row' style='background:var(--diff-add); border-color:var(--diff-add-border);'>"
+            "<span class='nippou-item'>目標に対する評価</span>"
+            f"<span class='nippou-value'>{chip}{html.escape(ev.achievement)}"
+            f"{('（' + html.escape(ev.effect) + '）') if ev.effect else ''}</span></div>"
+        )
+    return "<div class='nippou-table'>" + "".join(rows) + "</div>"
 
 
 def _before_after_form_html(run_id: str, utterance: str = "", goal_ref: str = "") -> str:
     return f"""
+    <section>
     <h2>同じ発話を、変更前／変更後のチェックリストで処理する</h2>
-    <p class="meta">同一の発話データを2回構造化し、チェックリストの変更が記録の中身に
-      どう現れるかを並べます（design.md G6）。発話は Privacy Gate を通してから構造化します。</p>
     <form class="edit-form" method="post" action="/runs/{html.escape(run_id)}/before-after"
-          onsubmit="this.querySelector('button').disabled = true;
-                    this.querySelector('button').textContent = '処理中…';">
+          onsubmit="this.classList.add('is-submitting')">
       <label class="field-label" for="ba-utterance">発話内容</label>
       <textarea id="ba-utterance" name="utterance_text" rows="4">{html.escape(utterance or _SAMPLE_UTTERANCE)}</textarea>
       <label class="field-label" for="ba-goal">看護目標（新規の「評価」項目に紐づけます）</label>
       <textarea id="ba-goal" name="goal_ref" rows="2">{html.escape(goal_ref or "在宅療養の継続")}</textarea>
-      <button type="submit">Before / After を比較する</button>
+      <p class="field-hint">発話は Privacy Gate を通してから、両方のチェックリストで構造化します。</p>
+      <div class="actions stack">
+        <button type="submit" class="btn-primary">Before / After を比較する</button>
+        <div class="progress-state" role="status">
+          <span class="spinner"></span>
+          <span>2回の構造化を実行中… <small>30秒ほどかかる場合があります。画面を閉じないでください。</small></span>
+        </div>
+      </div>
     </form>
+    </section>
     """
 
 
@@ -1323,8 +1857,6 @@ def _load_checklist_diff(run_id: str, goal_ref: str) -> checklist.ChecklistDiff:
 
 
 def _checklist_diff_html(diff: checklist.ChecklistDiff) -> str:
-    added = set(diff.added)
-    changed_after = {after for _, after in diff.changed}
     notes = []
     if not diff.has_changes:
         notes.append(
@@ -1333,23 +1865,37 @@ def _checklist_diff_html(diff: checklist.ChecklistDiff) -> str:
     if diff.unmatched:
         notes.append(
             f"承認済みだが現在のチェックリストに該当項目が見つからなかった更新案が "
-            f"{len(diff.unmatched)} 件あります（項目ラベルが既に書き換わっている可能性。"
-            "項目の不変ID設計が未着手のため、ここは取りこぼしとして表示しています）。"
+            f"{len(diff.unmatched)} 件あります（項目ラベルが既に書き換わっている可能性）。"
         )
-    notes_html = (
-        "<div class='run-warning'><ul>" + "".join(f"<li>{html.escape(n)}</li>" for n in notes) + "</ul></div>"
-        if notes
-        else ""
-    )
+    notes_html = "".join(f"<div class='run-warning'>⚠️ <span>{html.escape(n)}</span></div>" for n in notes)
+    modified_before = {before for before, _ in diff.changed}
+    modified_after = {after for _, after in diff.changed}
     return f"""
     {notes_html}
-    <div class="diff">
-      <div><span class="field-label">変更前のチェックリスト</span>
-        {_checklist_items_html(diff.before.items, set())}</div>
-      <div><span class="field-label">変更後のチェックリスト</span>
-        {_checklist_items_html(diff.after.items, added | changed_after)}</div>
+    <section>
+    <h2>チェックリストの変更点</h2>
+    <div class="diff compare">
+      <div class="before">
+        <p class="col-head">改定前（BEFORE）</p>
+        {_check_list_html(diff.before.items, modified=modified_before, added=set())}
+      </div>
+      <div class="after">
+        <p class="col-head">改定後（AFTER）</p>
+        {_check_list_html(diff.after.items, modified=modified_after, added=set(diff.added))}
+      </div>
     </div>
+    </section>
     """
+
+
+def _before_after_header(run_id: str, diff: checklist.ChecklistDiff) -> str:
+    return (
+        "<h1>Before / After 比較</h1>"
+        f"<p class='page-sub'>run_id {html.escape(run_id)} ・ "
+        f"<a href='/runs/{html.escape(run_id)}'>このrunの承認画面へ戻る</a></p>"
+        "<div class='evidence-note'>🎙 <span>入力音声は同一。差はチェックリストのみ。<br>"
+        "<small>同じ発話を改定前後のチェックリストで構造化し、結果の違いだけを比較しています。</small></span></div>"
+    )
 
 
 @app.get("/runs/{run_id}/before-after", response_class=HTMLResponse)
@@ -1357,8 +1903,7 @@ def before_after_form(run_id: str) -> HTMLResponse:
     """G6 Before/After 比較画面の入力フォーム。"""
     diff = _load_checklist_diff(run_id, "在宅療養の継続")
     body = (
-        f"<h1>Before / After 比較（run_id={html.escape(run_id[:8])}）</h1>"
-        f"<p class='home-nav'><a href='/runs/{html.escape(run_id)}'>← このrunの承認画面へ戻る</a></p>"
+        _before_after_header(run_id, diff)
         + _checklist_diff_html(diff)
         + _before_after_form_html(run_id)
     )
@@ -1381,16 +1926,13 @@ def before_after_compare(
     finally:
         adapter.close()
 
-    header = (
-        f"<h1>Before / After 比較（run_id={html.escape(run_id[:8])}）</h1>"
-        f"<p class='home-nav'><a href='/runs/{html.escape(run_id)}'>← このrunの承認画面へ戻る</a></p>"
-    )
+    header = _before_after_header(run_id, diff)
 
     if not privacy.cleared_for_downstream(gate_result):
         body = (
             header
             + _gate_summary_html(gate_result)
-            + "<p class='run-warning'>セキュリティ検査に通らなかったため、構造化は行っていません。</p>"
+            + "<p class='run-warning'>⚠️ <span>セキュリティ検査に通らなかったため、構造化は行っていません。</span></p>"
             + _checklist_diff_html(diff)
         )
         return _render_page(body)
@@ -1407,17 +1949,19 @@ def before_after_compare(
 
     _save_privacy_audit(gate_result, proceeded=True)
 
+    # G6の落ち: 変更後にだけ現れた項目（追加・文言変更後）をハイライトする
+    appeared = set(diff.added) | {after for _, after in diff.changed}
     body = (
         header
         + _gate_summary_html(gate_result)
-        + "<h2>発話内容（仮名化済み・両方に同じものを入力）</h2>"
-        + f"<p class='trace-text'>{html.escape(gate_result.sanitized_text)}</p>"
         + _checklist_diff_html(diff)
-        + "<h2>構造化結果の比較</h2>"
-        + "<div class='diff'>"
-        + f"<div><span class='field-label'>変更前</span>{_nippou_record_html(before_record)}</div>"
-        + f"<div><span class='field-label'>変更後</span>{_nippou_record_html(after_record)}</div>"
-        + "</div>"
+        + "<section><h2>同じ発話の構造化結果</h2>"
+        + f"<div class='speech-text'>{_highlight_pseudonyms(gate_result.sanitized_text)}</div>"
+        + "<p class='section-hint'>ハイライト部分が仮名化された箇所です。</p>"
+        + "<div class='diff compare' style='margin-top:16px;'>"
+        + f"<div class='before'><p class='col-head'>改定前のチェックリストで構造化</p>{_compare_record_html(before_record, set())}</div>"
+        + f"<div class='after'><p class='col-head'>改定後のチェックリストで構造化</p>{_compare_record_html(after_record, appeared)}</div>"
+        + "</div></section>"
         + _before_after_form_html(run_id, utterance_text, goal_ref)
     )
     return _render_page(body)
@@ -1426,40 +1970,116 @@ def before_after_compare(
 def _monthly_form_html(subject_code: str = "", month: str = "") -> str:
     """月報の条件入力。**POSTで送る**——利用者コードをURLのクエリに載せないため。"""
     return f"""
-    <h2>月報を作成</h2>
     <form class="run-form" method="post" action="/monthly">
-      <label for="monthly-subject">利用者コード</label>
-      <select id="monthly-subject" name="subject_code">{_patient_code_options(subject_code)}</select>
-      <label for="monthly-month">対象月</label>
-      <input type="month" id="monthly-month" name="month"
-             value="{html.escape(month or date.today().strftime('%Y-%m'))}">
-      <button type="submit">月報を作成</button>
+      <div>
+        <label class="field-label" for="monthly-subject">利用者コード</label>
+        <select id="monthly-subject" name="subject_code">{_patient_code_options(subject_code)}</select>
+      </div>
+      <div>
+        <label class="field-label" for="monthly-month">対象月</label>
+        <input type="month" id="monthly-month" name="month"
+               value="{html.escape(month or date.today().strftime('%Y-%m'))}">
+      </div>
+      <button type="submit" class="btn-primary">月報を作成</button>
     </form>
+    <p class="method-note">集計は日報の記録から決定論的に行っています（LLMは使用していません）。
+      実名は保持しておらず、集計単位は利用者コードから導出した安定仮名です。</p>
+    """
+
+
+def _vital_chart_svg(report: monthly.MonthlyReport) -> str:
+    """バイタル折れ線（handoff §⑦: インラインSVG直書き・数値表が正、グラフは補助）。
+
+    y軸は 40〜160 固定（血圧・脈拍を1軸に載せるデザインどおり）。範囲外はクランプする。
+    点が2つ未満なら折れ線にならないので出さない。
+    """
+    points = [v for v in report.vitals if v.systolic or v.pulse]
+    if len(points) < 2:
+        return ""
+
+    left, right, top, bottom = 80, 640, 20, 150
+
+    def x_at(index: int) -> float:
+        return left + index * (right - left) / (len(points) - 1)
+
+    def y_at(value: float) -> float:
+        clamped = max(40.0, min(160.0, float(value)))
+        return bottom - (clamped - 40.0) * (bottom - top) / 120.0
+
+    def polyline(values: list, color: str, dashed: bool = False) -> str:
+        coords = " ".join(
+            f"{x_at(i):.0f},{y_at(v):.0f}" for i, v in enumerate(values) if v is not None
+        )
+        if coords.count(" ") < 1:
+            return ""
+        dash = " stroke-dasharray='4 3'" if dashed else ""
+        return f"<polyline fill='none' stroke='{color}' stroke-width='2'{dash} points='{coords}'/>"
+
+    lines = (
+        polyline([v.systolic for v in points], "var(--moegi)")
+        + polyline([v.diastolic for v in points], "var(--moegi-accent)")
+        + polyline([v.pulse for v in points], "var(--ink-soft)", dashed=True)
+    )
+
+    # 日付ラベルは最大4つに間引く（月/日だけ）
+    label_indexes = sorted({0, len(points) - 1, len(points) // 3, 2 * len(points) // 3})
+    date_labels = "".join(
+        f"<text x='{x_at(i):.0f}' y='166' text-anchor='middle' font-size='10' fill='var(--ink-soft)'>"
+        f"{html.escape(points[i].visited_on[5:].replace('-', '/'))}</text>"
+        for i in label_indexes
+    )
+
+    note = ""
+    if report.unparsed_vital_visits:
+        note = (
+            f"<p class='chart-note'>読み取れなかった訪問（{report.unparsed_vital_visits}件）は"
+            "グラフに含まれません。</p>"
+        )
+
+    return f"""
+    <div class="vital-chart">
+      <p class="chart-title">血圧（収縮期/拡張期）と脈拍 — 補助グラフ（数値は下の表が正）</p>
+      <svg viewBox="0 0 720 180" role="img" aria-label="血圧と脈拍の折れ線グラフ">
+        <line x1="{left - 40}" y1="{top}" x2="{left - 40}" y2="{bottom}" stroke="var(--line)" stroke-width="1"/>
+        <line x1="{left - 40}" y1="{bottom}" x2="700" y2="{bottom}" stroke="var(--line)" stroke-width="1"/>
+        <text x="{left - 46}" y="{top + 6}" text-anchor="end" font-size="10" fill="var(--ink-soft)">160</text>
+        <text x="{left - 46}" y="{(top + bottom) / 2 + 4:.0f}" text-anchor="end" font-size="10" fill="var(--ink-soft)">100</text>
+        <text x="{left - 46}" y="{bottom + 2}" text-anchor="end" font-size="10" fill="var(--ink-soft)">40</text>
+        {lines}
+        <text x="700" y="{y_at(points[-1].systolic) if points[-1].systolic else 55:.0f}" text-anchor="end" font-size="11" fill="var(--moegi)">収縮期</text>
+        <text x="700" y="{y_at(points[-1].diastolic) + 14 if points[-1].diastolic else 107:.0f}" text-anchor="end" font-size="11" fill="var(--moegi-accent)">拡張期</text>
+        <text x="700" y="{y_at(points[-1].pulse) + 28 if points[-1].pulse else 130:.0f}" text-anchor="end" font-size="11" fill="var(--ink-soft)">脈拍(破線)</text>
+        {date_labels}
+      </svg>
+      {note}
+    </div>
     """
 
 
 def _monthly_report_html(report: monthly.MonthlyReport, subject_code: str) -> str:
     if report.is_empty:
-        return (
-            f"<p class='run-warning'>利用者 {html.escape(subject_code)} の "
-            f"{report.year}年{report.month}月の日報がありません。"
-            "先に <a href='/nippou'>日報エージェント</a> で記録を作成してください。</p>"
-        )
+        return f"""
+        <div class="empty-state">
+          <span class="empty-icon">🗒</span>
+          <p><strong>{report.year}年{report.month}月の日報はまだありません</strong></p>
+          <p>利用者 {html.escape(subject_code)} のこの月の日報が保存されると、ここに月報が表示されます。</p>
+          <a href="/nippou">日報を入力する →</a>
+        </div>"""
 
     procedures = (
         "".join(
-            f"<tr><th style='text-align:left; padding:0.25rem 1rem 0.25rem 0;'>{html.escape(name)}</th>"
-            f"<td style='font-variant-numeric: tabular-nums;'>{count} 回</td></tr>"
+            f"<tr><td>{html.escape(name)}</td><td class='num'>{count}</td></tr>"
             for name, count in sorted(report.procedure_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         )
-        or "<tr><td class='meta'>処置の選択がありませんでした。</td></tr>"
+        or "<tr><td colspan='2' class='meta'>処置の選択がありませんでした。</td></tr>"
     )
 
     fill_rates = "".join(
-        f"<tr><th style='text-align:left; padding:0.25rem 1rem 0.25rem 0; font-weight:500;'>"
-        f"{html.escape(r.label)}</th>"
-        f"<td style='font-variant-numeric: tabular-nums;'>{r.filled} / {r.total}"
-        f"（{r.rate * 100:.0f}%）</td></tr>"
+        f"<tr><td>{html.escape(r.label)}</td><td>"
+        f"<div class='rate-cell'><div class='rate-bar{' zero' if r.total and not r.filled else ''}'>"
+        f"<div class='rate-fill' style='width:{r.rate * 100:.0f}%'></div></div>"
+        f"<span class='rate-num'>{r.filled}/{r.total} ・ {r.rate * 100:.0f}%</span></div>"
+        f"</td></tr>"
         for r in report.item_fill_rates
     )
 
@@ -1468,9 +2088,11 @@ def _monthly_report_html(report: monthly.MonthlyReport, subject_code: str) -> st
 
     vitals = (
         "".join(
-            f"<tr><td>{html.escape(v.visited_on)}</td>"
-            f"<td>{_cell(v.systolic)}{'/' if v.systolic else ''}{_cell(v.diastolic) if v.systolic else ''}</td>"
-            f"<td>{_cell(v.temperature)}</td><td>{_cell(v.pulse)}</td><td>{_cell(v.spo2)}</td></tr>"
+            f"<tr><td>{html.escape(v.visited_on[5:].replace('-', '/'))}</td>"
+            f"<td class='num'>{_cell(v.systolic)}{'/' if v.systolic else ''}{_cell(v.diastolic) if v.systolic else ''}</td>"
+            f"<td class='num'>{_cell(v.temperature)}{'℃' if v.temperature else ''}</td>"
+            f"<td class='num'>{_cell(v.pulse)}</td>"
+            f"<td class='num'>{_cell(v.spo2)}{'%' if v.spo2 else ''}</td></tr>"
             for v in report.vitals
         )
         or "<tr><td colspan='5' class='meta'>数値として読み取れたバイタルがありませんでした。</td></tr>"
@@ -1479,49 +2101,60 @@ def _monthly_report_html(report: monthly.MonthlyReport, subject_code: str) -> st
     notes = []
     if report.unparsed_vital_visits:
         notes.append(
-            f"バイタルを数値として読み取れなかった訪問が {report.unparsed_vital_visits} 件あります"
-            "（0件として集計せず、この件数として残しています）"
+            f"バイタルを読み取れなかった訪問が <strong>{report.unparsed_vital_visits}件</strong> あります。"
+            "数値表では「—」と表示しています（0件として集計していません）。"
         )
     if report.non_passed_records:
         notes.append(
-            f"Privacy Gate が passed 以外だった記録が {report.non_passed_records} 件含まれています"
-            "（段階導入モードで保存されたもの）"
+            f"Privacy Gate が passed 以外だった記録が <strong>{report.non_passed_records}件</strong> 含まれています"
+            "（段階導入モードで保存されたもの）。"
         )
     if len(report.policy_versions) > 1:
         notes.append(
             "複数の仮名化ポリシーバージョンの記録が混在しています（"
             + "、".join(html.escape(v) for v in report.policy_versions)
-            + "）"
+            + "）。"
         )
-    notes_html = (
-        "<div class='run-warning'><ul>" + "".join(f"<li>{n}</li>" for n in notes) + "</ul></div>"
-        if notes
-        else ""
-    )
+    notes_html = "".join(f"<div class='run-warning'>⚠️ <span>{n}</span></div>" for n in notes)
 
     return f"""
-    <div class="proposal">
-      <div class="meta">利用者 {html.escape(subject_code)} ・ 安定仮名
-        {html.escape(report.subject_pseudonym)} ・ 集計はすべて決定論的（LLM不使用）</div>
-      <h2 style="margin-top:0.5rem;">{report.year}年{report.month}月の月報</h2>
-      <div class="chips">
-        <span class="chip">訪問 {report.visit_count} 回</span>
-        <span class="chip">訪問日数 {report.visit_days} 日</span>
-        <span class="chip">評価の記入 {report.evaluation_filled} / {report.evaluation_total}</span>
+    <section>
+      <h2>{html.escape(subject_code)} ・ {report.year}年{report.month}月</h2>
+      <div class="stat-chips">
+        <span class="stat-chip">訪問 <strong>{report.visit_count}</strong> 回</span>
+        <span class="stat-chip">訪問日数 <strong>{report.visit_days}</strong> 日</span>
+        <span class="stat-chip">評価の記入 <strong>{report.evaluation_filled}/{report.evaluation_total}</strong></span>
       </div>
       {notes_html}
-      <h3>処置別の実施回数</h3>
-      <table style="width:100%; border-collapse: collapse;">{procedures}</table>
-      <h3>チェックリスト項目の記入率</h3>
-      <table style="width:100%; border-collapse: collapse;">{fill_rates}</table>
-      <h3>バイタルの推移</h3>
-      <table style="width:100%; border-collapse: collapse; font-variant-numeric: tabular-nums;">
-        <tr><th style="text-align:left;">訪問日</th><th style="text-align:left;">血圧</th>
-            <th style="text-align:left;">体温</th><th style="text-align:left;">脈拍</th>
-            <th style="text-align:left;">SpO2</th></tr>
-        {vitals}
+      <p class="section-hint">安定仮名 {html.escape(report.subject_pseudonym)}</p>
+    </section>
+
+    <section>
+      <h2>処置別の実施回数</h2>
+      <table>
+        <thead><tr><th>処置</th><th class="num">実施回数</th></tr></thead>
+        <tbody>{procedures}</tbody>
       </table>
-    </div>
+    </section>
+
+    <section>
+      <h2>チェックリスト項目の記入率</h2>
+      <table>
+        <thead><tr><th>項目</th><th>記入率（記入あり日報 / 全日報）</th></tr></thead>
+        <tbody>{fill_rates}</tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>バイタルの推移</h2>
+      {_vital_chart_svg(report)}
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>日付</th><th class="num">血圧</th><th class="num">体温</th><th class="num">脈拍</th><th class="num">SpO2</th></tr></thead>
+          <tbody>{vitals}</tbody>
+        </table>
+      </div>
+    </section>
     """
 
 
@@ -1530,9 +2163,7 @@ def monthly_form() -> HTMLResponse:
     """月報の作成フォーム（ledger R-84）。"""
     body = f"""
     <h1>月報</h1>
-    <p class="meta">保存済みの日報を1ヶ月分まとめます。集計はすべて決定論的で、
-      LLMは使いません——同じ日報からは常に同じ月報が出ます。
-      実名は保持しておらず、集計単位は利用者コードから導出した安定仮名です。</p>
+    <p class="page-sub">利用者コードと対象月を選んで作成します。</p>
     {_monthly_form_html()}
     """
     return _render_page(body)
@@ -1567,8 +2198,9 @@ def monthly_report(subject_code: str = Form(...), month: str = Form(...)) -> HTM
     )
     body = (
         "<h1>月報</h1>"
-        + _monthly_report_html(report, subject_code)
+        "<p class='page-sub'>利用者コードと対象月を選んで作成します。</p>"
         + _monthly_form_html(subject_code, f"{year:04d}-{month_number:02d}")
+        + _monthly_report_html(report, subject_code)
     )
     return _render_page(body)
 
@@ -1587,44 +2219,62 @@ def deliveries_page() -> HTMLResponse:
     finally:
         conn.close()
 
-    if not rows:
-        listing = "<p class='meta'>配信はまだありません。更新案を承認すると、ここに積まれます。</p>"
+    if pending:
+        summary = f"""
+        <div class="pending-summary">
+          <span class="count">{pending}</span>
+          <span class="desc"><strong>送信待ちがあります</strong>回線が復帰すると自動で送信されます。操作は必要ありません。</span>
+        </div>"""
     else:
-        listing = "".join(
-            f"<div class='proposal' data-status='{'承認' if r['status'] == 'sent' else '未承認'}'>"
-            f"<div class='meta'>{html.escape(r['created_at'])} ・ 宛先 {html.escape(r['recipient'])}"
-            f" ・ チャネル {html.escape(r['channel'])}</div>"
-            f"<div class='chips'><span class='chip'>"
-            f"{'送信済み' if r['status'] == 'sent' else '送信待ち'}</span>"
-            + (f"<span class='meta'>試行 {r['attempts']} 回</span>" if r["attempts"] else "")
-            + (
-                f"<span class='meta'>{html.escape(r['sent_at'])} に送信</span>"
-                if r["sent_at"]
-                else ""
-            )
-            + "</div>"
-            f"<p class='rationale'>{html.escape(r['subject'])}</p>"
-            "</div>"
-            for r in rows
-        )
+        summary = ""
 
     channel_note = (
-        f"送信先は<strong>メール</strong>（{html.escape(DELIVERY_CONFIG.recipient)}）です。"
+        f"送信先はメール（{html.escape(DELIVERY_CONFIG.recipient)}）です。"
         if DELIVERY_CONFIG.channel == delivery.CHANNEL_EMAIL
-        else "SMTPが未設定のため、送信は <code>data/outbox/</code> への書き出しになります"
-        "（環境変数 MOEGI_SMTP_HOST を設定すると実際にメールを送ります）。"
+        else "SMTPが未設定のため、送信は data/outbox/ への書き出しになります。"
     )
+
+    if not rows:
+        listing = """
+        <div class="empty-state">
+          <span class="empty-icon">📮</span>
+          <p><strong>配信はまだありません</strong></p>
+          <p>更新案が承認されると、配信がここに表示されます。</p>
+        </div>"""
+    else:
+        items = []
+        for r in rows:
+            is_pending = r["status"] != "sent"
+            chip = (
+                "<span class='chip chip-queued'>⏳ 送信待ち</span>"
+                if is_pending
+                else "<span class='chip chip-sent'>✓ 送信済み</span>"
+            )
+            meta_parts = []
+            if r["attempts"]:
+                meta_parts.append(f"試行 {r['attempts']}回")
+            if r["sent_at"]:
+                meta_parts.append(f"送信 {html.escape(r['sent_at'])}")
+            elif is_pending:
+                meta_parts.append(f"自動で再試行します（{DELIVERY_FLUSH_INTERVAL_SECONDS:.0f}秒間隔）")
+            meta = (
+                f"<span class='delivery-meta'>{' ・ '.join(meta_parts)}</span>" if meta_parts else ""
+            )
+            items.append(
+                f"<li{' class=\'pending\'' if is_pending else ''}>"
+                f"<span class='delivery-when'>{html.escape(r['created_at'])}</span>"
+                f"<span>宛先 {html.escape(r['recipient'])} ・ チャネル {html.escape(r['channel'])}</span>"
+                f"{chip}{meta}</li>"
+            )
+        listing = "<ul class='run-list delivery-grid'>" + "".join(items) + "</ul>"
 
     body = f"""
     <h1>配信キュー</h1>
-    <p class="meta">承認された更新案は、まずここに積まれます（store-and-forward）。
-      オフライン中は「送信待ち」のまま溜まり、回線が復帰すると
-      {DELIVERY_FLUSH_INTERVAL_SECONDS:.0f}秒以内に<strong>自動で</strong>送信されます。
-      手動の再送ボタンは意図的に置いていません。{channel_note}</p>
-    <p class="meta">積んでよいのは承認済み更新案（チェックリスト項目のラベルと更新後の文言）だけです。
-      日報・SOAP・文字起こし原文・仮名対応表は積みません——本文に識別子が混じっていた場合、
-      キューに入れること自体を拒否します。</p>
-    <h2>送信待ち {pending} 件</h2>
+    <p class="page-sub">承認済みの変更が現場の記録画面に届くまでの状況です。{channel_note}</p>
+    {summary}
+    <p class="auto-note">送信は自動でリトライされます（このページに再送ボタンはありません —
+      押さないと届かない仕組みにしないためです）。積まれるのは承認済み更新案のみで、
+      日報・SOAP・文字起こし原文・仮名対応表は積みません。</p>
     {listing}
     """
     return _render_page(body)
@@ -1643,37 +2293,50 @@ def privacy_audits() -> HTMLResponse:
         conn.close()
 
     if not audits:
-        rows = "<p class='meta'>まだ監査記録がありません。</p>"
+        listing = """
+        <div class="empty-state">
+          <span class="empty-icon">🔎</span>
+          <p><strong>監査記録はまだありません</strong></p>
+          <p>日報の構造化を実行すると、仮名化処理の記録がここに残ります。</p>
+        </div>"""
     else:
-        rows = "".join(
-            f"<div class='proposal'>"
-            f"<div class='meta'>{html.escape(a['occurred_at'])} ・ request_id {html.escape(a['request_id'][:8])}"
-            f" ・ ポリシー {html.escape(a['policy_version'])} ・ モード {html.escape(a['mode'])}</div>"
-            f"<div class='chips'><span class='chip'>{html.escape(a['gate_status'])}</span>"
-            + "".join(
-                f"<span class='chip'>{html.escape(_detection_type_label(t))} {n}件</span>"
+        gate_chips = {
+            "passed": ("chip-gate-passed", "✓"),
+            "review_required": ("chip-gate-review", "⚠"),
+            "blocked": ("chip-gate-blocked", "⛔"),
+            "failed": ("chip-gate-failed", "❓"),
+        }
+        items = []
+        for a in audits:
+            chip_css, chip_icon = gate_chips.get(a["gate_status"], ("chip-gate-review", "⚠"))
+            detects = "".join(
+                f"<span class='detect-chip'>{html.escape(_detection_type_label(t))} {n}件</span>"
                 for t, n in sorted(a["detected_counts"].items())
             )
-            + f"<span class='confidence'>{a['duration_ms']:.0f}ms</span></div>"
-            f"<p class='meta'>構造化へ進んだ: {'はい' if a['proceeded_to_structuring'] else 'いいえ'}"
-            f" ／ 外部送信: {'あり' if a['external_transmission'] else 'なし'}"
-            f" ／ 人の確認が必要: {'はい' if a['needs_human_review'] else 'いいえ'}</p>"
-            + (
-                "<p class='meta'>"
-                + "、".join(html.escape(_reason_text(c)) for c in a["reason_codes"])
-                + "</p>"
-                if a["reason_codes"]
-                else ""
+            detects_html = f"<div class='audit-detects'>{detects}</div>" if detects else ""
+            proceeded = "進んだ" if a["proceeded_to_structuring"] else "中止"
+            external = "あり" if a["external_transmission"] else "なし"
+            items.append(
+                "<li class='audit'>"
+                "<div class='audit-head'>"
+                f"<span class='audit-when'>{html.escape(a['occurred_at'])}</span>"
+                f"<span class='chip {chip_css}'>{chip_icon} {html.escape(a['gate_status'])}</span>"
+                "</div>"
+                f"{detects_html}"
+                "<div class='audit-meta'>"
+                f"<span>処理時間 <strong>{a['duration_ms'] / 1000:.1f}秒</strong></span>"
+                f"<span>構造化へ <strong>{proceeded}</strong></span>"
+                f"<span>外部送信 <strong>{external}</strong></span>"
+                f"<span>request_id <strong>{html.escape(a['request_id'][:8])}</strong></span>"
+                f"<span>ポリシー <strong>{html.escape(a['policy_version'])}</strong></span>"
+                "</div></li>"
             )
-            + "</div>"
-            for a in audits
-        )
+        listing = "<ul class='run-list'>" + "".join(items) + "</ul>"
 
     body = f"""
     <h1>仮名化処理の監査記録</h1>
-    <p class="meta">記録しているのは種別と件数だけです。文字起こし原文・仮名化済み全文・
-      日報／SOAP全文・仮名対応表はこのテーブルに保存していません
-      （design/moegi/privacy.md §10）。</p>
-    {rows}
+    <p class="page-sub">検出した個人情報は種別と件数のみを記録しています。値そのものは保存されません。</p>
+    {listing}
     """
     return _render_page(body)
+

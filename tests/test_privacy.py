@@ -846,7 +846,8 @@ class DownstreamWiringTest(unittest.TestCase):
         ):
             body = self.webapp._structure_and_render(result, self._context()).body.decode()
         self.assertIn("/nippou/recheck", body)
-        self.assertIn("セキュリティ検査で停止", body)
+        # handoff §⑥ の停止バナー文言（旧:「セキュリティ検査で停止しました」）
+        self.assertIn("処理を停止しました", body)
         self.assertNotIn("12345678", body)
 
     def test_structure_receives_sanitized_text_when_gate_passes(self):

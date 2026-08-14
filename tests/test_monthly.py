@@ -397,7 +397,8 @@ class MonthlyWebTest(unittest.TestCase):
                 "/monthly", data={"subject_code": "P-100987", "month": "1999-01"}
             )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("日報がありません", response.text)
+        # handoff §⑦ の空状態文言（旧:「…の日報がありません」）
+        self.assertIn("日報はまだありません", response.text)
 
     def test_invalid_month_falls_back_without_error(self):
         with mock.patch.dict(os.environ, {vault.KEY_ENV_VAR: _TEST_VAULT_KEY}):
