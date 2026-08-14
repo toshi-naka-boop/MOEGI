@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -1068,3 +1069,45 @@ class WordingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DetectionLabelTest(unittest.TestCase):
+    """検出種別の画面表示（利用者に英語の型名を読ませない）。"""
+
+    def setUp(self):
+        from moegi import webapp
+
+        self.webapp = webapp
+
+    def test_known_types_are_japanese(self):
+        self.assertEqual(self.webapp._detection_type_label("insurance_number"), "保険証番号")
+        self.assertEqual(self.webapp._detection_type_label("person_name"), "氏名")
+
+    def test_llm_prefixed_types_are_marked_as_contextual(self):
+        self.assertIn("文脈から検出", self.webapp._detection_type_label("llm:person_name"))
+        self.assertIn("氏名", self.webapp._detection_type_label("llm:person_name"))
+
+    def test_unknown_type_falls_back_to_the_raw_value(self):
+        self.assertEqual(self.webapp._detection_type_label("something_new"), "something_new")
+
+    def test_every_rule_type_has_a_japanese_label(self):
+        # rules.py に型を足したら、画面のラベルも足すことを強制する
+        for type_ in rules.RULE_TYPES:
+            with self.subTest(type=type_):
+                self.assertNotEqual(
+                    self.webapp._detection_type_label(type_), type_, f"{type_} の日本語ラベルが無い"
+                )
+
+    def test_every_reason_code_used_by_the_gate_has_japanese_text(self):
+        # gate.py が出し得る理由コードが、画面で生のまま出ないこと
+        import inspect
+
+        from moegi.privacy import gate
+
+        source = inspect.getsource(gate)
+        codes = set(re.findall(r'reason_codes\.append\("([a-z_]+)"\)', source))
+        for code in codes:
+            with self.subTest(code=code):
+                self.assertNotEqual(
+                    self.webapp._reason_text(code), code, f"{code} の日本語表示が無い"
+                )

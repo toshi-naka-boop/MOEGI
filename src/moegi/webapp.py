@@ -789,8 +789,36 @@ _REASON_MESSAGES = {
     "llm_timeout": "ローカルLLMの補完検出がタイムアウトしました",
     "llm_unavailable": "ローカルLLMへ接続できませんでした",
     "llm_invalid_json": "ローカルLLMの応答形式が不正でした",
+    "llm_skipped_blocked": "記録できない情報を先に検出したため、ローカルLLMは呼び出していません",
     "residual_registered_name": "仮名化後にも登録済みの氏名が残っています",
+    "clinical_numbers_dropped": "バイタルなどの数値が仮名化の前後で消えています",
 }
+
+#: 検出種別 → 現場向けの日本語（利用者はこの画面で英語の型名を読まされる理由がない）。
+_DETECTION_TYPE_LABELS = {
+    "phone": "電話番号",
+    "email": "メールアドレス",
+    "postal_code": "郵便番号",
+    "address": "住所",
+    "birthdate": "生年月日",
+    "insurance_number": "保険証番号",
+    "medical_card_number": "診察券番号",
+    "patient_id": "利用者ID",
+    "ip_address": "IPアドレス",
+    "url_credential": "URL内の認証情報",
+    "api_key": "APIキー・秘密情報",
+    "jwt": "トークン",
+    "person_name": "氏名",
+    "facility": "施設・医療機関名",
+}
+
+
+def _detection_type_label(type_: str) -> str:
+    """検出種別を日本語にする。`llm:` 接頭辞はローカルLLMが見つけた分。"""
+    if type_.startswith("llm:"):
+        base = type_.removeprefix("llm:")
+        return f"{_DETECTION_TYPE_LABELS.get(base, base)}（文脈から検出）"
+    return _DETECTION_TYPE_LABELS.get(type_, type_)
 
 
 def _reason_text(code: str) -> str:
@@ -813,7 +841,7 @@ def _gate_summary_html(result: privacy.GateResult) -> str:
     """
     counts = (
         "".join(
-            f"<span class='chip'>{html.escape(t)} {n}件</span> "
+            f"<span class='chip'>{html.escape(_detection_type_label(t))} {n}件</span> "
             for t, n in sorted(result.detected_counts.items())
         )
         or "<span class='meta'>検出はありませんでした。</span>"
@@ -1454,7 +1482,7 @@ def privacy_audits() -> HTMLResponse:
             f" ・ ポリシー {html.escape(a['policy_version'])} ・ モード {html.escape(a['mode'])}</div>"
             f"<div class='chips'><span class='chip'>{html.escape(a['gate_status'])}</span>"
             + "".join(
-                f"<span class='chip'>{html.escape(t)} {n}件</span>"
+                f"<span class='chip'>{html.escape(_detection_type_label(t))} {n}件</span>"
                 for t, n in sorted(a["detected_counts"].items())
             )
             + f"<span class='confidence'>{a['duration_ms']:.0f}ms</span></div>"
