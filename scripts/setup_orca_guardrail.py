@@ -89,29 +89,46 @@ CUSTOM_ENTITIES = [
     },
 ]
 
+#: block対象（保険証・診察券番号）をまとめた正規表現。
+#: ⚠️ per-entity override（entity_actions）は**組み込みエンティティ専用**で、カスタム
+#: エンティティには適用できない（コンソール実測・2026-08-15）。そのためblockしたい
+#: カスタム2種は「正規表現ルール（action=block）」として別ルールに分離する。
+JP_BLOCK_PATTERN = (
+    r"(被保険者証番号|被保険者番号|保険証番号|保険者番号|記号番号|診察券番号|診察券|カルテ番号|カルテNo)"
+    r"[ 　:：＝=.]{0,3}[0-9０-９A-Za-z\-−]{4,24}"
+)
+
 #: ルール本体。stage=input（クラウドへ出るリクエストの遮断が目的。outputは通達の
 #: 更新案文言でPIIが出る余地が薄く、streaming時のmask未対応も踏まえ input に絞る）。
+#:
+#: ⚠️ 順序が重要: blockルールを**先頭**に置く。maskルールが先に走って番号を
+#: マスクしてしまうと、後段のblockルールが原文を見られず発火しない恐れがある
+#: （ルールは順に実行される・公式docs）。
 RULES = [
+    {
+        # 保険証・診察券番号はブロック（ローカルの仮名化ポリシー §6 と同方針）
+        "type": "regex",
+        "stage": "input",
+        "action": "block",
+        "pattern": JP_BLOCK_PATTERN,
+    },
     {
         "type": "pii",
         "stage": "input",
         "action": "mask",
         # ORCA組み込みentity: メール・電話(米式)・IPはmask、キー・JWTはblock
+        # （entity_actionsは組み込みエンティティにのみ有効）
         "entities": ["email", "phone", "ip", "api_key_openai", "aws_access_key", "jwt"],
         "entity_actions": {
             "api_key_openai": "block",
             "aws_access_key": "block",
             "jwt": "block",
         },
+        # 保険証・診察券番号のカスタム検出器もmask側に残す（blockルールが誤って
+        # 無効化・削除された場合でも、少なくともマスクはされる多重防御）。
         "custom_entities": CUSTOM_ENTITIES,
     },
 ]
-
-#: 日本向けカスタム検出器のうち block にしたいもの（entity_actions で上書き）。
-CUSTOM_ENTITY_ACTIONS = {
-    "jp_insurance_number": "block",
-    "jp_medical_card_number": "block",
-}
 
 
 def build_guardrail_payload(*, mode: str = "enforce") -> dict:
@@ -121,11 +138,10 @@ def build_guardrail_payload(*, mode: str = "enforce") -> dict:
     ドキュメントの observe 段階。Privacy Gate の observe/shadow/enforce と同じ思想）。
     """
     rules = json.loads(json.dumps(RULES))  # deep copy
-    for rule in rules:
-        if rule["type"] == "pii":
-            rule["entity_actions"] = {**rule.get("entity_actions", {}), **CUSTOM_ENTITY_ACTIONS}
-            if mode == "observe":
-                rule["action"] = "flag"
+    if mode == "observe":
+        for rule in rules:
+            rule["action"] = "flag"
+            if "entity_actions" in rule:
                 rule["entity_actions"] = {k: "flag" for k in rule["entity_actions"]}
     return {
         "name": GUARDRAIL_NAME,
@@ -193,7 +209,7 @@ def print_manual_instructions(payload: dict) -> None:
 
  1. https://www.orcarouter.ai/console/guardrails → New guardrail
     名前: {GUARDRAIL_NAME}
- 2. ルールに以下のJSONを設定（PII detection・Input stage）:
+ 2. ルールを**2本・この順序で**設定（①regex/Block ②PII/Mask。順序が重要）:
 """.rstrip()
     )
     print(json.dumps(payload["rules"], ensure_ascii=False, indent=2))

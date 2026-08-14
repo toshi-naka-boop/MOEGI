@@ -252,14 +252,33 @@ class GuardrailPolicyTest(unittest.TestCase):
     def test_blocking_actions_match_local_policy(self):
         # ローカルの仮名化ポリシー（rules.BLOCKING_TYPES相当）と方針が揃っていること:
         # 保険証・診察券番号・キー・JWTは block、連絡先は mask。
+        # ⚠️ entity_actionsは組み込みエンティティ専用（コンソール実測）のため、
+        # 保険証・診察券番号のblockは先頭のregexルールが担う。
         payload = guardrail_script.build_guardrail_payload()
-        rule = payload["rules"][0]
-        actions = rule["entity_actions"]
-        self.assertEqual(actions["jp_insurance_number"], "block")
-        self.assertEqual(actions["jp_medical_card_number"], "block")
+        block_rule, mask_rule = payload["rules"]
+        self.assertEqual(block_rule["type"], "regex")
+        self.assertEqual(block_rule["action"], "block")
+        for keyword in ("被保険者証番号", "診察券番号", "カルテ番号"):
+            self.assertIn(keyword, block_rule["pattern"])
+        actions = mask_rule["entity_actions"]
         self.assertEqual(actions["jwt"], "block")
         self.assertEqual(actions["api_key_openai"], "block")
-        self.assertEqual(rule["action"], "mask")  # 既定は mask（連絡先系）
+        # カスタムエンティティ名がentity_actionsに混じっていないこと（バリデーションで弾かれる）
+        self.assertTrue(all(not k.startswith("jp_") for k in actions))
+        self.assertEqual(mask_rule["action"], "mask")  # 既定は mask（連絡先系）
+
+    def test_block_rule_comes_before_mask_rule(self):
+        # maskが先に走ると番号がマスクされ、後段のblockが原文を見られず発火しない恐れがある。
+        payload = guardrail_script.build_guardrail_payload()
+        self.assertEqual([r["action"] for r in payload["rules"]], ["block", "mask"])
+
+    def test_block_pattern_is_re2_safe_and_fires_on_synthetic_numbers(self):
+        pattern = guardrail_script.JP_BLOCK_PATTERN
+        for forbidden in ("(?=", "(?!", "(?<", "\\1"):
+            self.assertNotIn(forbidden, pattern)
+        self.assertIsNotNone(re.search(pattern, "被保険者証番号 12345678 を確認"))
+        self.assertIsNotNone(re.search(pattern, "診察券番号 A-99881 を控えた"))
+        self.assertIsNone(re.search(pattern, "血圧128/78、体温36.5度、脈拍70"))
 
     def test_mask_tags_match_moegi_tags(self):
         # ORCA側のマスクがMOEGIの型付きタグと同じ表記になる（再検査・表示が一貫する）。
@@ -269,9 +288,10 @@ class GuardrailPolicyTest(unittest.TestCase):
 
     def test_observe_mode_downgrades_everything_to_flag(self):
         payload = guardrail_script.build_guardrail_payload(mode="observe")
-        rule = payload["rules"][0]
-        self.assertEqual(rule["action"], "flag")
-        self.assertTrue(all(v == "flag" for v in rule["entity_actions"].values()))
+        for rule in payload["rules"]:
+            self.assertEqual(rule["action"], "flag")
+            if "entity_actions" in rule:
+                self.assertTrue(all(v == "flag" for v in rule["entity_actions"].values()))
 
     def test_payload_is_not_default_and_enabled(self):
         # 本番トラフィックへの適用（キーへの紐づけ）は人の明示操作に残す。
