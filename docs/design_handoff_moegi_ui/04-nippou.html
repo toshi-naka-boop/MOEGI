@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>日報の入力 — MOEGI</title>
+<style>
+:root {
+  --ink:#333A32; --ink-soft:#565F4F;
+  --paper:#FAF9F2; --paper-raised:#FFFFFF; --line:#DDE0D2;
+  --moegi:#007B43; --moegi-ink:#FFFFFF; --moegi-hover:#00693A;
+  --moegi-soft:#EEF3E1; --moegi-deep:#00532F; --moegi-accent:#AACF53;
+  --link:#007B43; --link-hover:#00532F; --focus:#007B43;
+  --warn:#8A5E00; --warn-soft:#FBF1E2; --warn-icon:#F8B500;
+  --danger:#C0242F; --danger-soft:#FBEAEA;
+  --status-approved:#2E6E45; --status-approved-bg:#EAF4EA;
+  --status-rejected:#5F6557; --status-rejected-bg:#F1F1EC;
+  --status-edited:#33587F;   --status-edited-bg:#EAF1F8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:#E9ECE0; --ink-soft:#ADB69D;
+    --paper:#15180F; --paper-raised:#1E2216; --line:#3A4130;
+    --moegi:#A9CE58; --moegi-ink:#1C2114; --moegi-hover:#C0DC82;
+    --moegi-soft:#262C1B; --moegi-deep:#C4DE85; --moegi-accent:#AACF53;
+    --link:#C4DE85; --link-hover:#E0EDBC; --focus:#A9CE58;
+    --warn:#E5B45B; --warn-soft:#2E2716; --warn-icon:#F8B500;
+    --danger:#E98973; --danger-soft:#33201B;
+    --status-approved:#9CCB8B; --status-approved-bg:#22311F;
+    --status-rejected:#A9AFA0; --status-rejected-bg:#2A2D24;
+    --status-edited:#8FB4DE;   --status-edited-bg:#1F2A38;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif;
+  font-size:16px; line-height:1.75;
+}
+main { max-width:880px; margin:0 auto; padding:16px 16px 72px; }
+a { color:var(--link); text-underline-offset:3px; }
+a:hover { color:var(--link-hover); }
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:2px; }
+h1 { font-size:24px; line-height:1.4; margin:20px 0 16px; }
+.home-nav { font-size:14px; padding-top:4px; }
+.home-nav a { display:inline-flex; align-items:center; min-height:44px; }
+.queue-note {
+  display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
+  background:var(--warn-soft); border-left:4px solid var(--warn-icon);
+  border-radius:0 8px 8px 0; padding:10px 16px; margin-top:8px; font-size:14px;
+}
+/* ---- 注意書き（折りたたみ） ---- */
+.run-warning {
+  background:var(--moegi-soft); border:1px solid var(--line);
+  border-radius:8px; margin:0 0 10px;
+}
+.run-warning summary {
+  cursor:pointer; list-style:none; display:flex; align-items:center; gap:8px;
+  min-height:44px; padding:4px 14px; font-size:14px; font-weight:600;
+}
+.run-warning summary::-webkit-details-marker { display:none; }
+.run-warning summary::after {
+  content:"開く"; margin-left:auto; font-size:12px; font-weight:400;
+  color:var(--link); flex:none;
+}
+.run-warning[open] summary::after { content:"閉じる"; }
+.run-warning .warning-body {
+  padding:0 14px 12px; font-size:13px; color:var(--ink-soft); margin:0;
+}
+/* ---- フォーム ---- */
+.run-form { display:flex; flex-direction:column; gap:24px; margin-top:20px; }
+fieldset { border:0; margin:0; padding:0; }
+.field-label, legend.field-label {
+  display:block; font-size:13px; font-weight:700; color:var(--ink);
+  margin-bottom:8px; padding:0;
+}
+.field-hint { font-size:12px; color:var(--ink-soft); margin:6px 0 0; }
+select, input[type="date"], textarea {
+  width:100%; font:inherit; font-size:16px; color:var(--ink);
+  background:var(--paper-raised); border:1px solid var(--line);
+  border-radius:8px; padding:0 14px; min-height:48px;
+}
+textarea { padding:12px 14px; min-height:120px; line-height:1.7; resize:vertical; }
+select:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline:2px solid var(--focus); outline-offset:0; border-color:var(--focus);
+}
+.field-row { display:grid; grid-template-columns:1fr; gap:16px; }
+/* ---- 処置ピル ---- */
+.procedure-buttons {
+  display:flex; flex-wrap:wrap; gap:10px; padding:0; margin:0; list-style:none;
+}
+.procedure-pill { position:relative; }
+.procedure-pill input {
+  position:absolute; inset:0; width:100%; height:100%;
+  opacity:0; margin:0; cursor:pointer;
+}
+.procedure-pill span {
+  display:inline-flex; align-items:center; gap:6px;
+  min-height:44px; padding:6px 18px;
+  border:1.5px solid var(--line); border-radius:999px;
+  background:var(--paper-raised); font-size:15px; line-height:1.4;
+}
+.procedure-pill span::before {
+  content:""; width:14px; height:14px; flex:none;
+  border:1.5px solid var(--ink-soft); border-radius:4px;
+}
+.procedure-pill input:checked + span {
+  background:var(--moegi-soft); border-color:var(--moegi); font-weight:700;
+}
+.procedure-pill input:checked + span::before {
+  content:"✓"; border-color:var(--moegi);
+  background:var(--moegi); color:var(--moegi-ink);
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700;
+}
+.procedure-pill input:focus-visible + span {
+  outline:2px solid var(--focus); outline-offset:2px;
+}
+/* ---- 録音 ---- */
+.record-controls {
+  display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  background:var(--paper-raised); border:1px solid var(--line);
+  border-radius:12px; padding:16px;
+}
+.record-btn {
+  font:inherit; font-size:16px; font-weight:700; cursor:pointer;
+  min-height:48px; padding:0 24px; border-radius:999px;
+  border:1.5px solid var(--moegi); background:var(--paper-raised); color:var(--link);
+  display:inline-flex; align-items:center; gap:10px;
+}
+.record-btn:hover { background:var(--moegi-soft); }
+.record-btn .rec-dot {
+  width:12px; height:12px; border-radius:50%;
+  background:var(--danger); flex:none;
+}
+.record-controls.recording {
+  border-color:var(--danger); background:var(--danger-soft);
+}
+.record-controls.recording .record-btn {
+  border-color:var(--danger); color:var(--danger); background:var(--paper-raised);
+}
+.record-controls.recording .rec-dot { animation:rec-blink 1.2s ease-in-out infinite; }
+@keyframes rec-blink { 0%,100%{opacity:1;} 50%{opacity:.25;} }
+.record-status { font-size:14px; color:var(--ink-soft); }
+.record-controls.recording .record-status { color:var(--danger); font-weight:700; }
+/* ---- 出力形式 ---- */
+.output-options {
+  display:flex; flex-direction:column; gap:8px;
+  background:var(--paper-raised); border:1px solid var(--line);
+  border-radius:12px; padding:14px 16px; font-size:15px;
+}
+.output-options .fixed { color:var(--ink-soft); display:flex; align-items:center; gap:10px; min-height:32px; }
+.output-options label {
+  display:flex; align-items:center; gap:10px; min-height:44px; cursor:pointer;
+}
+.output-options input[type="checkbox"] {
+  width:22px; height:22px; margin:0; accent-color:var(--moegi);
+}
+/* ---- 構造化ボタン＋進行表示 ---- */
+.actions { display:flex; flex-direction:column; gap:8px; }
+.btn-primary {
+  font:inherit; font-size:17px; font-weight:700; cursor:pointer;
+  min-height:48px; padding:0 24px; border-radius:8px;
+  border:1.5px solid transparent;
+  background:var(--moegi); color:var(--moegi-ink);
+  width:100%;
+}
+.btn-primary:hover { background:var(--moegi-hover); }
+.btn-primary:active { background:var(--moegi-deep); }
+/* 押下後: JSで .run-form に is-submitting を付ける（1行のみ） */
+.progress-state { display:none; }
+.run-form.is-submitting .btn-primary { display:none; }
+.run-form.is-submitting .progress-state {
+  display:flex; align-items:center; gap:12px;
+  min-height:48px; padding:0 18px; border-radius:8px;
+  background:var(--moegi-soft); border:1.5px solid var(--moegi);
+  font-size:15px; font-weight:700; color:var(--moegi-deep);
+  position:relative; overflow:hidden;
+}
+.progress-state::before {
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(90deg, transparent, color-mix(in oklch, var(--moegi) 18%, transparent), transparent);
+  animation:progress-sweep 1.6s linear infinite;
+}
+@keyframes progress-sweep { from{transform:translateX(-100%);} to{transform:translateX(100%);} }
+.progress-state .spinner {
+  width:18px; height:18px; flex:none; border-radius:50%;
+  border:2.5px solid var(--line); border-top-color:var(--moegi);
+  animation:spin 0.9s linear infinite;
+}
+@keyframes spin { to{transform:rotate(360deg);} }
+.progress-state small { font-weight:400; color:var(--ink-soft); font-size:12px; }
+@media (prefers-reduced-motion: reduce) {
+  .rec-dot, .progress-state::before, .spinner { animation:none !important; }
+}
+@media (min-width:600px) {
+  main { padding:20px 20px 72px; }
+  .field-row { grid-template-columns:1fr 1fr; }
+  .btn-primary { width:auto; align-self:flex-start; min-width:280px; }
+  .progress-state { align-self:stretch; }
+}
+/* ---- 状態確認用（実装時に削除） ---- */
+.state-review {
+  margin-top:56px; border-top:2px dashed var(--line); padding-top:24px;
+  display:flex; flex-direction:column; gap:20px;
+}
+.state-review h2 { font-size:16px; margin:0; color:var(--ink-soft); }
+.state-review .state-label { font-size:13px; font-weight:700; color:var(--ink); margin:0 0 8px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="home-nav"><a href="#">← MOEGI ホーム</a></nav>
+
+  <div class="queue-note"><span><strong>送信待ち 2 件</strong>。回線が復帰すると自動で送信されます。</span></div>
+
+  <h1>日報の入力</h1>
+
+  <details class="run-warning">
+    <summary>🖥 音声とテキストは、この端末とローカルサーバーの中で処理されます</summary>
+    <p class="warning-body">録音した音声・入力したテキストは事業所内のサーバーで文字起こし・構造化され、外部のクラウドサービスには送信されません。</p>
+  </details>
+  <details class="run-warning">
+    <summary>🔎 保存の前に Privacy Gate の検査を通ります</summary>
+    <p class="warning-body">構造化の前に、氏名・電話番号などの直接識別子を機械的に検出して仮名化します。仮名化後も病状・服薬などの要配慮個人情報は残るため、結果画面で内容を確認してください。記録に残せない情報（保険証番号など）を検出した場合、処理は停止します。</p>
+  </details>
+
+  <form class="run-form" method="post" action="#" onsubmit="this.classList.add('is-submitting')">
+    <div class="field-row">
+      <div>
+        <label class="field-label" for="patient">利用者コード</label>
+        <select id="patient" name="patient_code">
+          <option value="P-100234" selected>P-100234</option>
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="visit-date">訪問日</label>
+        <input type="date" id="visit-date" name="visit_date" value="2026-08-15">
+      </div>
+    </div>
+
+    <fieldset>
+      <legend class="field-label">処置内容（当てはまるものをすべて選択）</legend>
+      <ul class="procedure-buttons">
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="バイタル測定" checked><span>バイタル測定</span></li>
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="創傷処置（褥瘡ケア等）"><span>創傷処置（褥瘡ケア等）</span></li>
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="吸引"><span>吸引</span></li>
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="点滴・注射"><span>点滴・注射</span></li>
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="服薬管理"><span>服薬管理</span></li>
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="清拭・入浴介助"><span>清拭・入浴介助</span></li>
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="排泄ケア"><span>排泄ケア</span></li>
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="リハビリテーション"><span>リハビリテーション</span></li>
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="カテーテル管理"><span>カテーテル管理</span></li>
+        <li class="procedure-pill"><input type="checkbox" name="procedure" value="ターミナルケア"><span>ターミナルケア</span></li>
+      </ul>
+    </fieldset>
+
+    <div>
+      <span class="field-label">音声で記録</span>
+      <div class="record-controls">
+        <button type="button" class="record-btn"><span class="rec-dot"></span>録音を開始</button>
+        <span class="record-status">待機中（タップで録音開始）</span>
+      </div>
+      <p class="field-hint">録音中はボタンが赤枠に変わり、●が点滅します。もう一度タップで停止。</p>
+    </div>
+
+    <div>
+      <label class="field-label" for="speech-text">またはテキストで直接入力</label>
+      <textarea id="speech-text" name="text" placeholder="例: PATIENT_001さん、血圧128の76、体温36.5度。左踵の褥瘡はサイズ縮小。長女さんに服薬の説明を実施。"></textarea>
+    </div>
+
+    <div>
+      <span class="field-label">出力形式</span>
+      <div class="output-options">
+        <span class="fixed">📄 日報 — 常に作成されます</span>
+        <label><input type="checkbox" name="soap" value="1" checked> SOAP（S/O/A/P）も作成する</label>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn-primary">構造化する</button>
+      <div class="progress-state" role="status">
+        <span class="spinner"></span>
+        <span>構造化を実行中… <small>30秒ほどかかる場合があります。画面を閉じないでください。</small></span>
+      </div>
+    </div>
+  </form>
+
+  <section class="state-review" aria-label="状態確認用">
+    <h2>⚠ 状態確認用セクション（レビュー用・実装時に削除）</h2>
+    <div>
+      <p class="state-label">1. 録音ボタン：録音中（.record-controls に .recording を付与）</p>
+      <div class="record-controls recording">
+        <button type="button" class="record-btn"><span class="rec-dot"></span>録音を停止</button>
+        <span class="record-status">録音中 0:42（タップで停止）</span>
+      </div>
+    </div>
+    <div>
+      <p class="state-label">2. 「構造化する」押下後（.run-form に .is-submitting を付与 → ボタンが進行表現に置換）</p>
+      <div class="run-form is-submitting" style="margin-top:0;">
+        <div class="actions">
+          <button type="button" class="btn-primary">構造化する</button>
+          <div class="progress-state" role="status">
+            <span class="spinner"></span>
+            <span>構造化を実行中… <small>30秒ほどかかる場合があります。画面を閉じないでください。</small></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

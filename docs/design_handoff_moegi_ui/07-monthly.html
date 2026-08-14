@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>月報 — MOEGI</title>
+<style>
+:root {
+  --ink:#333A32; --ink-soft:#565F4F;
+  --paper:#FAF9F2; --paper-raised:#FFFFFF; --line:#DDE0D2;
+  --moegi:#007B43; --moegi-ink:#FFFFFF; --moegi-hover:#00693A;
+  --moegi-soft:#EEF3E1; --moegi-deep:#00532F; --moegi-accent:#AACF53;
+  --link:#007B43; --link-hover:#00532F; --focus:#007B43;
+  --warn:#8A5E00; --warn-soft:#FBF1E2; --warn-icon:#F8B500;
+  --danger:#C0242F; --danger-soft:#FBEAEA;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:#E9ECE0; --ink-soft:#ADB69D;
+    --paper:#15180F; --paper-raised:#1E2216; --line:#3A4130;
+    --moegi:#A9CE58; --moegi-ink:#1C2114; --moegi-hover:#C0DC82;
+    --moegi-soft:#262C1B; --moegi-deep:#C4DE85; --moegi-accent:#AACF53;
+    --link:#C4DE85; --link-hover:#E0EDBC; --focus:#A9CE58;
+    --warn:#E5B45B; --warn-soft:#2E2716; --warn-icon:#F8B500;
+    --danger:#E98973; --danger-soft:#33201B;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif;
+  font-size:15px; line-height:1.75;
+}
+main { max-width:880px; margin:0 auto; padding:20px 20px 72px; }
+a { color:var(--link); text-underline-offset:3px; }
+a:hover { color:var(--link-hover); }
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:2px; }
+h1 { font-size:24px; line-height:1.4; margin:20px 0 4px; }
+h2 { font-size:18px; margin:0 0 12px; }
+.page-sub { font-size:13px; color:var(--ink-soft); margin:0 0 20px; }
+.home-nav { font-size:14px; padding-top:4px; }
+.home-nav a { display:inline-flex; align-items:center; min-height:44px; }
+.queue-note {
+  display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
+  background:var(--warn-soft); border-left:4px solid var(--warn-icon);
+  border-radius:0 8px 8px 0; padding:10px 16px; margin-top:8px; font-size:14px;
+}
+section { margin-bottom:36px; }
+/* ---- 作成フォーム ---- */
+.run-form {
+  display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap;
+  background:var(--paper-raised); border:1px solid var(--line);
+  border-radius:12px; padding:16px; margin-bottom:12px;
+}
+.run-form > div { flex:1 1 180px; }
+.field-label { display:block; font-size:13px; font-weight:700; margin-bottom:6px; }
+select, input[type="month"] {
+  width:100%; font:inherit; font-size:15px; color:var(--ink);
+  background:var(--paper); border:1px solid var(--line);
+  border-radius:8px; padding:0 12px; min-height:44px;
+}
+select:focus-visible, input:focus-visible { outline:2px solid var(--focus); outline-offset:0; border-color:var(--focus); }
+.btn-primary {
+  font:inherit; font-size:15px; font-weight:700; cursor:pointer;
+  min-height:44px; padding:0 24px; border-radius:8px; border:1.5px solid transparent;
+  background:var(--moegi); color:var(--moegi-ink); flex:none;
+}
+.btn-primary:hover { background:var(--moegi-hover); }
+.btn-primary:active { background:var(--moegi-deep); }
+.method-note { font-size:13px; color:var(--ink-soft); margin:0 0 28px; }
+/* ---- サマリチップ ---- */
+.chips { display:flex; gap:12px; flex-wrap:wrap; }
+.chip {
+  display:inline-flex; align-items:baseline; gap:8px;
+  background:var(--moegi-soft); border:1px solid var(--line);
+  border-radius:999px; padding:8px 20px; font-size:14px; font-weight:600;
+}
+.chip strong { font-size:20px; font-weight:700; color:var(--moegi-deep); }
+.run-warning {
+  display:flex; gap:10px; align-items:baseline;
+  background:var(--warn-soft); border-left:4px solid var(--warn-icon);
+  border-radius:0 8px 8px 0; padding:10px 16px; margin-top:16px; font-size:13px;
+}
+/* ---- 表 ---- */
+table { width:100%; border-collapse:collapse; font-size:14px; background:var(--paper-raised); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+th, td { text-align:left; padding:8px 14px; border-bottom:1px solid var(--line); }
+thead th { font-size:12px; font-weight:700; color:var(--ink-soft); background:var(--paper); }
+tbody tr:last-child td { border-bottom:0; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+/* ---- 記入率バー ---- */
+.rate-cell { display:flex; align-items:center; gap:12px; }
+.rate-bar {
+  flex:1 1 120px; height:10px; border-radius:999px;
+  background:var(--paper); border:1px solid var(--line); overflow:hidden;
+}
+.rate-fill { height:100%; background:var(--moegi); border-radius:999px; }
+.rate-bar.zero { background:repeating-linear-gradient(-45deg, var(--paper), var(--paper) 4px, var(--line) 4px, var(--line) 5px); }
+.rate-num { flex:none; font-variant-numeric:tabular-nums; font-size:13px; min-width:84px; text-align:right; }
+/* ---- バイタル ---- */
+.vital-chart {
+  background:var(--paper-raised); border:1px solid var(--line);
+  border-radius:8px; padding:14px 16px; margin-bottom:12px;
+}
+.vital-chart .chart-title { font-size:13px; font-weight:700; margin:0 0 6px; }
+.vital-chart svg { width:100%; height:auto; display:block; }
+.vital-chart .chart-note { font-size:12px; color:var(--ink-soft); margin:6px 0 0; }
+.table-scroll { overflow-x:auto; }
+.table-scroll table { min-width:560px; }
+/* ---- 確認用 ---- */
+.state-review { margin-top:56px; border-top:2px dashed var(--line); padding-top:24px; }
+.state-review h2 { font-size:16px; color:var(--ink-soft); }
+.empty-state {
+  background:var(--paper-raised); border:1px dashed var(--line);
+  border-radius:12px; padding:40px 20px; text-align:center;
+}
+.empty-state .empty-icon { font-size:32px; display:block; margin-bottom:8px; }
+.empty-state p { margin:0; color:var(--ink-soft); font-size:14px; }
+.empty-state p strong { color:var(--ink); font-size:16px; }
+.empty-state a { display:inline-flex; align-items:center; min-height:44px; font-weight:700; margin-top:4px; }
+@media (max-width:600px) {
+  main { padding:16px 16px 64px; }
+  body { font-size:16px; }
+  .run-form > div { flex:1 1 100%; }
+  .btn-primary { width:100%; min-height:48px; }
+  .chips { flex-direction:column; }
+  .chip { justify-content:space-between; }
+  .rate-num { min-width:72px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <nav class="home-nav"><a href="#">← MOEGI ホーム</a></nav>
+
+  <div class="queue-note"><span><strong>送信待ち 2 件</strong>。回線が復帰すると自動で送信されます。</span></div>
+
+  <h1>月報</h1>
+  <p class="page-sub">利用者コードと対象月を選んで作成します。</p>
+
+  <form class="run-form" method="post" action="#">
+    <div>
+      <label class="field-label" for="patient">利用者コード</label>
+      <select id="patient" name="patient_code"><option selected>P-100234</option></select>
+    </div>
+    <div>
+      <label class="field-label" for="month">対象月</label>
+      <input type="month" id="month" name="month" value="2026-08">
+    </div>
+    <button type="submit" class="btn-primary">月報を作成</button>
+  </form>
+  <p class="method-note">集計は日報の記録から決定論的に行っています（LLMは使用していません）。利用者は安定した仮名（PATIENT_001 など）で表示されます。</p>
+
+  <section>
+    <h2>P-100234 ・ 2026年8月</h2>
+    <div class="chips">
+      <span class="chip">訪問 <strong>9</strong> 回</span>
+      <span class="chip">訪問日数 <strong>8</strong> 日</span>
+      <span class="chip">評価の記入 <strong>7/9</strong></span>
+    </div>
+    <div class="run-warning">⚠️ <span>バイタルを読み取れなかった訪問が <strong>1件</strong> あります（8/9 の日報）。数値表では「—」と表示しています。</span></div>
+  </section>
+
+  <section>
+    <h2>処置別の実施回数</h2>
+    <table>
+      <thead><tr><th>処置</th><th class="num">実施回数</th></tr></thead>
+      <tbody>
+        <tr><td>バイタル測定</td><td class="num">9</td></tr>
+        <tr><td>創傷処置（褥瘡ケア等）</td><td class="num">6</td></tr>
+        <tr><td>服薬管理</td><td class="num">4</td></tr>
+        <tr><td>清拭・入浴介助</td><td class="num">2</td></tr>
+        <tr><td>点滴・注射</td><td class="num">1</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>チェックリスト項目の記入率</h2>
+    <table>
+      <thead><tr><th>項目</th><th>記入率（記入あり日報 / 全日報）</th></tr></thead>
+      <tbody>
+        <tr><td>バイタルサインの記録</td><td><div class="rate-cell"><div class="rate-bar"><div class="rate-fill" style="width:89%"></div></div><span class="rate-num">8/9 ・ 89%</span></div></td></tr>
+        <tr><td>実施した処置の内容</td><td><div class="rate-cell"><div class="rate-bar"><div class="rate-fill" style="width:100%"></div></div><span class="rate-num">9/9 ・ 100%</span></div></td></tr>
+        <tr><td>家族への指導・説明</td><td><div class="rate-cell"><div class="rate-bar"><div class="rate-fill" style="width:56%"></div></div><span class="rate-num">5/9 ・ 56%</span></div></td></tr>
+        <tr><td>訪問日数・訪問頻度の記録</td><td><div class="rate-cell"><div class="rate-bar"><div class="rate-fill" style="width:33%"></div></div><span class="rate-num">3/9 ・ 33%</span></div></td></tr>
+        <tr><td>評価（看護目標・達成度・効果）</td><td><div class="rate-cell"><div class="rate-bar"><div class="rate-fill" style="width:78%"></div></div><span class="rate-num">7/9 ・ 78%</span></div></td></tr>
+        <tr><td>特記事項</td><td><div class="rate-cell"><div class="rate-bar zero"><div class="rate-fill" style="width:0%"></div></div><span class="rate-num">0/9 ・ 0%</span></div></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>バイタルの推移</h2>
+    <div class="vital-chart">
+      <p class="chart-title">血圧（収縮期/拡張期）と脈拍 — 補助グラフ（数値は下の表が正）</p>
+      <svg viewBox="0 0 720 180" role="img" aria-label="血圧と脈拍の折れ線グラフ">
+        <line x1="40" y1="20" x2="40" y2="150" stroke="var(--line)" stroke-width="1"/>
+        <line x1="40" y1="150" x2="700" y2="150" stroke="var(--line)" stroke-width="1"/>
+        <text x="34" y="26" text-anchor="end" font-size="10" fill="var(--ink-soft)">160</text>
+        <text x="34" y="90" text-anchor="end" font-size="10" fill="var(--ink-soft)">100</text>
+        <text x="34" y="152" text-anchor="end" font-size="10" fill="var(--ink-soft)">40</text>
+        <!-- 収縮期 -->
+        <polyline fill="none" stroke="var(--moegi)" stroke-width="2" points="80,57 160,55 240,60 320,52 400,57 480,55 560,50 640,53"/>
+        <!-- 拡張期 -->
+        <polyline fill="none" stroke="var(--moegi-accent)" stroke-width="2" points="80,112 160,110 240,114 320,108 400,112 480,110 560,107 640,109"/>
+        <!-- 脈拍 -->
+        <polyline fill="none" stroke="var(--ink-soft)" stroke-width="2" stroke-dasharray="4 3" points="80,116 160,114 240,118 320,112 400,115 480,113 560,110 640,112"/>
+        <text x="700" y="55" text-anchor="end" font-size="11" fill="var(--moegi)">収縮期</text>
+        <text x="700" y="107" text-anchor="end" font-size="11" fill="var(--moegi-accent)">拡張期</text>
+        <text x="700" y="130" text-anchor="end" font-size="11" fill="var(--ink-soft)">脈拍(破線)</text>
+        <text x="80" y="166" text-anchor="middle" font-size="10" fill="var(--ink-soft)">8/1</text>
+        <text x="240" y="166" text-anchor="middle" font-size="10" fill="var(--ink-soft)">8/8</text>
+        <text x="400" y="166" text-anchor="middle" font-size="10" fill="var(--ink-soft)">8/15</text>
+        <text x="560" y="166" text-anchor="middle" font-size="10" fill="var(--ink-soft)">8/25</text>
+      </svg>
+      <p class="chart-note">読み取れなかった訪問（8/9）はグラフに含まれません。</p>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>日付</th><th class="num">血圧</th><th class="num">体温</th><th class="num">脈拍</th><th class="num">SpO2</th></tr></thead>
+        <tbody>
+          <tr><td>8/1</td><td class="num">132/78</td><td class="num">36.4℃</td><td class="num">74</td><td class="num">97%</td></tr>
+          <tr><td>8/4</td><td class="num">134/80</td><td class="num">36.6℃</td><td class="num">76</td><td class="num">96%</td></tr>
+          <tr><td>8/8</td><td class="num">128/76</td><td class="num">36.5℃</td><td class="num">72</td><td class="num">97%</td></tr>
+          <tr><td>8/9</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+          <tr><td>8/12</td><td class="num">136/82</td><td class="num">36.7℃</td><td class="num">78</td><td class="num">96%</td></tr>
+          <tr><td>8/15</td><td class="num">128/76</td><td class="num">36.5℃</td><td class="num">72</td><td class="num">97%</td></tr>
+          <tr><td>8/19</td><td class="num">130/78</td><td class="num">36.4℃</td><td class="num">75</td><td class="num">97%</td></tr>
+          <tr><td>8/22</td><td class="num">132/79</td><td class="num">36.6℃</td><td class="num">77</td><td class="num">96%</td></tr>
+          <tr><td>8/25</td><td class="num">129/77</td><td class="num">36.5℃</td><td class="num">73</td><td class="num">97%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="state-review" aria-label="状態確認用">
+    <h2>⚠ 状態確認用セクション（レビュー用・実装時に削除）— 空状態</h2>
+    <div class="empty-state">
+      <span class="empty-icon">🗒</span>
+      <p><strong>2026年7月の日報はまだありません</strong></p>
+      <p>この月の日報が保存されると、ここに月報が表示されます。</p>
+      <a href="#">日報を入力する →</a>
+    </div>
+  </section>
+</main>
+</body>
+</html>

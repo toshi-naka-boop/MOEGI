@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>検査で停止しました — MOEGI</title>
+<style>
+:root {
+  --ink:#333A32; --ink-soft:#565F4F;
+  --paper:#FAF9F2; --paper-raised:#FFFFFF; --line:#DDE0D2;
+  --moegi:#007B43; --moegi-ink:#FFFFFF; --moegi-hover:#00693A;
+  --moegi-soft:#EEF3E1; --moegi-deep:#00532F; --moegi-accent:#AACF53;
+  --link:#007B43; --link-hover:#00532F; --focus:#007B43;
+  --warn:#8A5E00; --warn-soft:#FBF1E2; --warn-icon:#F8B500;
+  --danger:#C0242F; --danger-soft:#FBEAEA;
+  --gate-blocked:#C0242F; --gate-blocked-bg:#FBEAEA;
+  --gate-blocked-fill:#A8391F;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:#E9ECE0; --ink-soft:#ADB69D;
+    --paper:#15180F; --paper-raised:#1E2216; --line:#3A4130;
+    --moegi:#A9CE58; --moegi-ink:#1C2114; --moegi-hover:#C0DC82;
+    --moegi-soft:#262C1B; --moegi-deep:#C4DE85; --moegi-accent:#AACF53;
+    --link:#C4DE85; --link-hover:#E0EDBC; --focus:#A9CE58;
+    --warn:#E5B45B; --warn-soft:#2E2716; --warn-icon:#F8B500;
+    --danger:#E98973; --danger-soft:#33201B;
+    --gate-blocked:#E98973; --gate-blocked-bg:#33201B;
+    --gate-blocked-fill:#A8391F;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif;
+  font-size:16px; line-height:1.75;
+}
+main { max-width:880px; margin:0 auto; padding:16px 16px 72px; }
+a { color:var(--link); text-underline-offset:3px; }
+a:hover { color:var(--link-hover); }
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:2px; }
+h1 { font-size:24px; line-height:1.4; margin:20px 0 16px; }
+h2 { font-size:18px; margin:0 0 12px; }
+.home-nav { font-size:14px; padding-top:4px; }
+.home-nav a { display:inline-flex; align-items:center; min-height:44px; }
+section { margin-bottom:32px; }
+/* ---- 停止バナー（唯一の赤塗り） ---- */
+.gate-summary.blocked {
+  border-radius:12px; background:var(--gate-blocked-fill); color:#FFFFFF;
+  padding:20px 16px; margin:0 0 12px;
+}
+.gate-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.gate-icon { font-size:24px; flex:none; }
+.gate-title { font-size:19px; font-weight:700; line-height:1.4; }
+.gate-chip {
+  display:inline-flex; font-size:12px; font-weight:700;
+  border-radius:999px; padding:2px 12px;
+  background:#FFFFFF; color:var(--gate-blocked-fill);
+}
+.gate-body { font-size:14px; margin:10px 0 0; opacity:.92; }
+.gate-detect { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+.detect-chip {
+  font-size:12px; font-weight:600; border-radius:999px; padding:2px 12px;
+  border:1px solid rgba(255,255,255,.55); color:#FFFFFF;
+}
+.no-send-note {
+  display:flex; align-items:center; gap:8px;
+  font-size:13px; color:var(--ink-soft);
+  padding:8px 4px; margin-bottom:24px;
+}
+/* ---- 停止理由 ---- */
+.block-reasons {
+  background:var(--paper-raised); border:1px solid var(--gate-blocked);
+  border-left:4px solid var(--gate-blocked);
+  border-radius:0 8px 8px 0; padding:14px 16px 14px 20px;
+  margin:0; font-size:14px;
+}
+.block-reasons li { margin:4px 0; }
+.block-reasons code {
+  font-family:ui-monospace,monospace; font-size:12px;
+  background:var(--gate-blocked-bg); color:var(--gate-blocked);
+  border-radius:4px; padding:1px 6px;
+}
+/* ---- 修正フォーム ---- */
+.edit-form { display:flex; flex-direction:column; gap:12px; }
+.field-label { font-size:13px; font-weight:700; }
+.field-hint { font-size:13px; color:var(--ink-soft); margin:0; }
+textarea {
+  width:100%; font:inherit; font-size:16px; line-height:1.8; color:var(--ink);
+  background:var(--paper-raised); border:1px solid var(--line);
+  border-radius:8px; padding:12px 14px; min-height:180px; resize:vertical;
+}
+textarea:focus-visible { outline:2px solid var(--focus); outline-offset:0; border-color:var(--focus); }
+.tag-note { font-size:12px; color:var(--ink-soft); margin:0; }
+.tag-note code {
+  font-family:ui-monospace,monospace; font-size:11px;
+  background:var(--moegi-soft); border-radius:4px; padding:1px 6px;
+}
+.actions { display:flex; flex-direction:column; gap:8px; }
+.btn-primary {
+  font:inherit; font-size:17px; font-weight:700; cursor:pointer;
+  min-height:48px; padding:0 24px; border-radius:8px; border:1.5px solid transparent;
+  background:var(--moegi); color:var(--moegi-ink); width:100%;
+}
+.btn-primary:hover { background:var(--moegi-hover); }
+.btn-primary:active { background:var(--moegi-deep); }
+.progress-state { display:none; }
+.edit-form.is-submitting .btn-primary { display:none; }
+.edit-form.is-submitting .progress-state {
+  display:flex; align-items:center; gap:12px;
+  min-height:48px; padding:0 18px; border-radius:8px;
+  background:var(--moegi-soft); border:1.5px solid var(--moegi);
+  font-size:15px; font-weight:700; color:var(--moegi-deep);
+  position:relative; overflow:hidden;
+}
+.progress-state::before {
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(90deg, transparent, color-mix(in oklch, var(--moegi) 18%, transparent), transparent);
+  animation:progress-sweep 1.6s linear infinite;
+}
+@keyframes progress-sweep { from{transform:translateX(-100%);} to{transform:translateX(100%);} }
+.progress-state .spinner {
+  width:18px; height:18px; flex:none; border-radius:50%;
+  border:2.5px solid var(--line); border-top-color:var(--moegi);
+  animation:spin 0.9s linear infinite;
+}
+@keyframes spin { to{transform:rotate(360deg);} }
+.progress-state small { font-weight:400; color:var(--ink-soft); font-size:12px; }
+.back-link { font-size:14px; }
+.back-link a { display:inline-flex; align-items:center; min-height:44px; }
+@media (prefers-reduced-motion: reduce) {
+  .progress-state::before, .spinner { animation:none !important; }
+}
+@media (min-width:600px) {
+  main { padding:20px 20px 72px; }
+  .gate-summary.blocked { padding:24px; }
+  .btn-primary { width:auto; align-self:flex-start; min-width:280px; }
+  .progress-state { align-self:stretch; }
+}
+</style>
+</head>
+<body>
+<main>
+  <nav class="home-nav"><a href="#">← MOEGI ホーム</a></nav>
+
+  <div class="gate-summary blocked" role="alert">
+    <div class="gate-head">
+      <span class="gate-icon">⛔</span>
+      <span class="gate-title">Privacy Gate: 処理を停止しました</span>
+      <span class="gate-chip">blocked</span>
+    </div>
+    <p class="gate-body">記録に残せない情報を検出したため、構造化を中止しました。日報・SOAPは保存されていません。</p>
+    <div class="gate-detect">
+      <span class="detect-chip">保険証番号 1件</span>
+    </div>
+  </div>
+  <p class="no-send-note">🔒 外部LLMへの送信は行われていません。</p>
+
+  <section>
+    <h2>停止した理由</h2>
+    <ul class="block-reasons">
+      <li>記録できない情報を検出しました（<code>insurance_number</code>）</li>
+      <li>保険証番号などの被保険者情報は、日報・SOAPのいずれにも保存できません</li>
+      <li>検出した値そのものは表示・保存されず、種別と件数のみを記録しています</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>修正して再検査</h2>
+    <form class="edit-form" method="post" action="#" onsubmit="this.classList.add('is-submitting')">
+      <p class="field-hint">下のテキストは直接識別子を仮名化した内容です。<strong>[[INSURANCE_NUMBER]]</strong> のタグ部分とその前後の言い回しを、番号に触れない表現に書き直してから再検査してください。</p>
+      <label class="field-label" for="retry-text">仮名化済みテキスト</label>
+      <textarea id="retry-text" name="text">PATIENT_001さん、血圧128の76、体温36.5度。左踵の褥瘡はサイズ縮小。長女さんから保険証の更新について相談があり、番号は [[INSURANCE_NUMBER]] とのこと。次回訪問時に書類を確認予定。</textarea>
+      <p class="tag-note">タグの意味: <code>[[INSURANCE_NUMBER]]</code> 保険証番号 ／ <code>[[PHONE]]</code> 電話番号 ／ <code>[[ADDRESS]]</code> 住所 ／ <code>[[EMAIL]]</code> メールアドレス</p>
+      <div class="actions">
+        <button type="submit" class="btn-primary">修正して再検査</button>
+        <div class="progress-state" role="status">
+          <span class="spinner"></span>
+          <span>再検査を実行中… <small>30秒ほどかかる場合があります。画面を閉じないでください。</small></span>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <p class="back-link"><a href="#">← 日報の入力からもう一度試す</a></p>
+</main>
+</body>
+</html>

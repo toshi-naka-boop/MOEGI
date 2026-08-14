@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>更新案の承認 — MOEGI</title>
+<style>
+:root {
+  --ink:#333A32; --ink-soft:#565F4F;
+  --paper:#FAF9F2; --paper-raised:#FFFFFF; --line:#DDE0D2;
+  --moegi:#007B43; --moegi-ink:#FFFFFF; --moegi-hover:#00693A;
+  --moegi-soft:#EEF3E1; --moegi-deep:#00532F; --moegi-accent:#AACF53;
+  --link:#007B43; --link-hover:#00532F; --focus:#007B43;
+  --warn:#8A5E00; --warn-soft:#FBF1E2; --warn-icon:#F8B500;
+  --danger:#C0242F; --danger-soft:#FBEAEA;
+  --status-approved:#2E6E45; --status-approved-bg:#EAF4EA;
+  --status-rejected:#5F6557; --status-rejected-bg:#F1F1EC;
+  --status-edited:#33587F;   --status-edited-bg:#EAF1F8;
+  --diff-add:#E3F2E9; --diff-add-border:#2E8B6E;
+  --diff-del:#FBEAEA; --diff-del-border:#D9333F;
+  --diff-mod:#FEF5E0; --diff-mod-border:#A87400;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:#E9ECE0; --ink-soft:#ADB69D;
+    --paper:#15180F; --paper-raised:#1E2216; --line:#3A4130;
+    --moegi:#A9CE58; --moegi-ink:#1C2114; --moegi-hover:#C0DC82;
+    --moegi-soft:#262C1B; --moegi-deep:#C4DE85; --moegi-accent:#AACF53;
+    --link:#C4DE85; --link-hover:#E0EDBC; --focus:#A9CE58;
+    --warn:#E5B45B; --warn-soft:#2E2716; --warn-icon:#F8B500;
+    --danger:#E98973; --danger-soft:#33201B;
+    --status-approved:#9CCB8B; --status-approved-bg:#22311F;
+    --status-rejected:#A9AFA0; --status-rejected-bg:#2A2D24;
+    --status-edited:#8FB4DE;   --status-edited-bg:#1F2A38;
+    --diff-add:#172A24; --diff-add-border:#57B08D;
+    --diff-del:#2E1A1D; --diff-del-border:#D96A6A;
+    --diff-mod:#2B2413; --diff-mod-border:#D9A03E;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif;
+  font-size:15px; line-height:1.75;
+}
+main { max-width:880px; margin:0 auto; padding:20px 20px 72px; }
+a { color:var(--link); text-underline-offset:3px; }
+a:hover { color:var(--link-hover); }
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:2px; }
+h1 { font-size:24px; line-height:1.4; margin:28px 0 4px; overflow-wrap:anywhere; }
+.run-sub { color:var(--ink-soft); font-size:13px; margin:0 0 24px; }
+.home-nav { font-size:14px; padding-top:4px; }
+.queue-note {
+  display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
+  background:var(--warn-soft); border-left:4px solid var(--warn-icon);
+  border-radius:0 8px 8px 0; padding:10px 16px; margin-top:16px; font-size:14px;
+}
+/* ---- 更新案カード ---- */
+.proposal {
+  background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+  padding:24px; margin:0 0 20px; position:relative;
+}
+.proposal[data-status="approved"] { border-left:4px solid var(--status-approved); }
+.proposal[data-status="edited"]   { border-left:4px solid var(--status-edited); }
+.proposal[data-status="rejected"] { border-left:4px solid var(--line); }
+.proposal[data-status="rejected"] > :not(.chips):not(.meta) { opacity:.55; }
+.meta { font-size:13px; color:var(--ink-soft); display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.meta strong { color:var(--ink); font-weight:600; }
+.chips { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0 14px; }
+.chip {
+  display:inline-flex; align-items:center; gap:4px;
+  font-size:12px; font-weight:700; line-height:1.5;
+  border-radius:999px; padding:2px 12px;
+}
+.chip-need     { background:var(--moegi-soft); color:var(--moegi-deep); }
+.chip-unknown  { background:var(--warn-soft); color:var(--warn); }
+.chip-pending  { background:var(--paper); color:var(--ink-soft); border:1px solid var(--line); }
+.chip-approved { background:var(--status-approved-bg); color:var(--status-approved); }
+.chip-rejected { background:var(--status-rejected-bg); color:var(--status-rejected); }
+.chip-edited   { background:var(--status-edited-bg); color:var(--status-edited); }
+/* 変更種別（通達Diffトークン。色だけに頼らず記号を併記） */
+.kind {
+  display:inline-flex; align-items:center; gap:4px;
+  font-size:12px; font-weight:700; border-radius:4px; padding:1px 8px;
+  background:var(--diff-mod); border:1px solid var(--diff-mod-border); color:var(--ink);
+}
+.kind-add { background:var(--diff-add); border-color:var(--diff-add-border); }
+.confidence { font-size:12px; color:var(--ink-soft); }
+.rationale { margin:0 0 16px; }
+/* ---- Before / After ---- */
+.diff { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
+.diff .before, .diff .after { border-radius:8px; padding:14px 16px; font-size:14px; }
+.diff .before { background:var(--paper); border:1px solid var(--line); color:var(--ink-soft); }
+.diff .after  { background:var(--diff-mod); border:1px solid var(--diff-mod-border); font-weight:600; }
+.field-label {
+  display:block; font-size:11px; font-weight:700; letter-spacing:.08em;
+  color:var(--ink-soft); margin-bottom:6px;
+}
+.diff .after .field-label { color:var(--ink); opacity:.7; }
+/* ---- 原文トレース ---- */
+.trace { margin-bottom:16px; }
+.trace summary {
+  cursor:pointer; color:var(--link); font-size:14px; font-weight:600;
+  min-height:44px; display:flex; align-items:center; width:fit-content; padding-right:8px;
+}
+.trace summary:hover { color:var(--link-hover); }
+.trace-text {
+  background:var(--paper); border:1px solid var(--line); border-radius:8px;
+  padding:14px 16px; font-size:13px; color:var(--ink-soft); margin-top:4px;
+}
+.trace-text mark {
+  background:var(--moegi-soft); color:var(--ink);
+  border-bottom:2px solid var(--moegi-accent); padding:0 2px;
+}
+/* ---- 操作 ---- */
+.actions { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
+button {
+  font:inherit; font-size:15px; font-weight:700; cursor:pointer;
+  min-height:44px; padding:0 22px; border-radius:8px;
+  border:1.5px solid transparent;
+}
+.btn-primary { background:var(--moegi); color:var(--moegi-ink); }
+.btn-primary:hover { background:var(--moegi-hover); }
+.btn-primary:active { background:var(--moegi-deep); color:var(--moegi-ink); }
+.btn-secondary { background:transparent; color:var(--link); border-color:var(--moegi); }
+.btn-secondary:hover { background:var(--moegi-soft); }
+button:disabled { background:var(--line); color:var(--ink-soft); cursor:not-allowed; border-color:transparent; }
+.edit-form .field-label { font-size:13px; letter-spacing:0; color:var(--ink); }
+.confirmed-text {
+  background:var(--paper); border:1px solid var(--line); border-radius:8px;
+  padding:12px 14px; font-size:14px; margin:0;
+}
+.confirmed-note { font-size:13px; color:var(--ink-soft); margin:6px 0 0; }
+textarea {
+  width:100%; font:inherit; font-size:14px; line-height:1.7;
+  color:var(--ink); background:var(--paper);
+  border:1px solid var(--line); border-radius:8px; padding:12px 14px;
+  min-height:96px; resize:vertical;
+}
+textarea:focus-visible { outline:2px solid var(--focus); outline-offset:0; border-color:var(--focus); }
+.edit-form button { margin-top:10px; }
+/* ---- ページ下部 ---- */
+.run-footer { border-top:1px solid var(--line); margin-top:36px; padding-top:24px; }
+.run-footer h2 { font-size:18px; margin:0 0 12px; }
+.delivery-list { list-style:none; margin:16px 0 0; padding:0; font-size:14px; }
+.delivery-list li {
+  display:flex; gap:10px; flex-wrap:wrap; align-items:baseline;
+  padding:10px 0; border-bottom:1px solid var(--line); color:var(--ink-soft);
+}
+@media (max-width:600px) {
+  main { padding:16px 16px 64px; }
+  .proposal { padding:18px 16px; }
+  .diff { grid-template-columns:1fr; }
+  .actions button { flex:1 1 40%; }
+}
+</style>
+</head>
+<body>
+<main>
+  <nav class="home-nav"><a href="#">← MOEGI ホーム</a></nav>
+
+  <div class="queue-note"><span><strong>送信待ち 2 件</strong>。回線が復帰すると自動で送信されます（手動の再送操作は必要ありません）。</span> <a href="#">配信キューを見る</a></div>
+
+  <h1>更新案の承認</h1>
+  <p class="run-sub">run_id e54d51999e1b481b9fa0fc19fbe400cb ・ 対象条文 第4の2 ・ 生成 2026-08-14 11:52</p>
+
+  <!-- 承認済 -->
+  <article class="proposal" data-status="approved">
+    <p class="meta"><span class="kind">変　改正</span> ・ 対象項目 <strong>指定訪問看護の実施に要した時間の記録</strong></p>
+    <div class="chips">
+      <span class="chip chip-need">要更新</span>
+      <span class="chip chip-approved">承認</span>
+      <span class="confidence">信頼度 0.75</span>
+    </div>
+    <p class="rationale">標準実施時間を下回る訪問看護が頻繁に行われる場合の取扱いが明記されており、実施時間の記録項目にその確認・記録要件を反映する必要があるため</p>
+    <div class="diff">
+      <div class="before"><span class="field-label">BEFORE</span>指定訪問看護の実施に要した時間の記録</div>
+      <div class="after"><span class="field-label">AFTER</span>指定訪問看護の実施に要した時間を記録し、標準実施時間を下回る場合は利用者側のやむを得ない事情の有無を確認・記録するとともに、同一日に同一利用者への複数回訪問又は複数利用者への訪問において頻繁に標準時間を下回ることがないことを確認している。</div>
+    </div>
+    <details class="trace">
+      <summary>▸ 原文トレース（条文: 第4の2）</summary>
+      <div class="trace-text">
+        <span class="field-label">新版（2026年改定）</span>
+        <p>指定訪問看護は、1回あたり30分から1時間30分を標準として行うものとする。<mark>標準実施時間を下回る指定訪問看護が同一日に同一の利用者に対して複数回、又は頻繁に行われる場合には、利用者側のやむを得ない事情の有無を確認し、その内容を記録しなければならない。</mark></p>
+      </div>
+    </details>
+    <div class="actions">
+      <form method="post" action="#"><button type="submit" class="btn-secondary" disabled>承認済み</button></form>
+      <form method="post" action="#"><button type="submit" class="btn-secondary">却下</button></form>
+    </div>
+    <div class="edit-form">
+      <span class="field-label">確定した文言</span>
+      <p class="confirmed-text">指定訪問看護の実施に要した時間を記録し、標準実施時間を下回る場合は利用者側のやむを得ない事情の有無を確認・記録するとともに、同一日に同一利用者への複数回訪問又は複数利用者への訪問において頻繁に標準時間を下回ることがないことを確認している。</p>
+      <p class="confirmed-note">承認済みのため編集できません（編集する場合は却下して差し戻してください）。</p>
+    </div>
+  </article>
+
+  <!-- 未承認 -->
+  <article class="proposal" data-status="pending">
+    <p class="meta"><span class="kind">変　改正</span> ・ 対象項目 <strong>訪問日数・訪問頻度の記録</strong></p>
+    <div class="chips">
+      <span class="chip chip-need">要更新</span>
+      <span class="chip chip-pending">未承認</span>
+      <span class="confidence">信頼度 0.85</span>
+    </div>
+    <p class="rationale">標準実施時間を下回る訪問が同一日・同一利用者や複数利用者に頻繁に行われていないかの確認が必要となるため、訪問日数・訪問頻度の記録項目にこの確認観点を反映する必要がある</p>
+    <div class="diff">
+      <div class="before"><span class="field-label">BEFORE</span>訪問日数・訪問頻度の記録</div>
+      <div class="after"><span class="field-label">AFTER</span>訪問日数・訪問頻度の記録において、標準実施時間を下回る訪問が同一日の同一利用者への複数回訪問または複数利用者への訪問として頻繁に行われていないことを確認し、やむを得ない事情がある場合はその内容を記録しているか。</div>
+    </div>
+    <details class="trace">
+      <summary>▸ 原文トレース（条文: 第4の2）</summary>
+      <div class="trace-text">
+        <span class="field-label">新版（2026年改定）</span>
+        <p>訪問日数及び訪問頻度は利用者の状態に応じて計画するものとし、<mark>標準実施時間を下回る訪問が頻繁に行われる場合は、指定訪問看護の実施と認められないことがある。</mark></p>
+      </div>
+    </details>
+    <div class="actions">
+      <form method="post" action="#"><button type="submit" class="btn-primary">承認</button></form>
+      <form method="post" action="#"><button type="submit" class="btn-secondary">却下</button></form>
+    </div>
+    <form class="edit-form" method="post" action="#">
+      <label class="field-label" for="edit-2">文言を編集</label>
+      <textarea id="edit-2" name="text">訪問日数・訪問頻度の記録において、標準実施時間を下回る訪問が同一日の同一利用者への複数回訪問または複数利用者への訪問として頻繁に行われていないことを確認し、やむを得ない事情がある場合はその内容を記録しているか。</textarea>
+      <button type="submit" class="btn-primary">編集して保存</button>
+    </form>
+  </article>
+
+  <!-- 編集済 -->
+  <article class="proposal" data-status="edited">
+    <p class="meta"><span class="kind kind-add">＋ 追加</span> ・ 対象項目 <strong>特記事項</strong></p>
+    <div class="chips">
+      <span class="chip chip-need">要更新</span>
+      <span class="chip chip-edited">編集済</span>
+      <span class="confidence">信頼度 0.75</span>
+    </div>
+    <p class="rationale">標準実施時間を下回る訪問の頻回実施に関する留意事項であり、特記事項欄に確認結果を記載する必要があるため</p>
+    <div class="diff">
+      <div class="before"><span class="field-label">BEFORE</span>特記事項</div>
+      <div class="after"><span class="field-label">AFTER</span>標準実施時間を下回る訪問の頻回実施状況を把握し、利用者側のやむを得ない事情による場合を除き、同一日に同一利用者への複数回実施又は複数利用者への実施が頻繁に行われていないことを確認した。</div>
+    </div>
+    <details class="trace">
+      <summary>▸ 原文トレース（条文: 第4の2）</summary>
+      <div class="trace-text">
+        <span class="field-label">新版（2026年改定）</span>
+        <p>前項の確認の結果は、<mark>訪問看護記録書の特記事項欄その他適切な箇所に記載する</mark>ものとする。</p>
+      </div>
+    </details>
+    <div class="actions">
+      <form method="post" action="#"><button type="submit" class="btn-primary">承認</button></form>
+      <form method="post" action="#"><button type="submit" class="btn-secondary">却下</button></form>
+    </div>
+    <form class="edit-form" method="post" action="#">
+      <label class="field-label" for="edit-3">文言を編集</label>
+      <textarea id="edit-3" name="text">標準実施時間を下回る訪問の頻回実施状況を把握し、利用者側のやむを得ない事情による場合を除き、同一日に同一利用者への複数回実施又は複数利用者への実施が頻繁に行われていないことを確認した。</textarea>
+      <button type="submit" class="btn-primary">編集して保存</button>
+    </form>
+  </article>
+
+  <!-- 却下 -->
+  <article class="proposal" data-status="rejected">
+    <p class="meta"><span class="kind">変　改正</span> ・ 対象項目 <strong>短時間訪問（20分以上30分未満）の実施記録</strong></p>
+    <div class="chips">
+      <span class="chip chip-unknown">判定不能</span>
+      <span class="chip chip-rejected">却下</span>
+      <span class="confidence">信頼度 0.41</span>
+    </div>
+    <p class="rationale">S2の規定が20分以上30分未満の短時間訪問記録の運用に影響する可能性があるが、対象範囲を条文から特定できなかった</p>
+    <div class="diff">
+      <div class="before"><span class="field-label">BEFORE</span>短時間訪問（20分以上30分未満）の実施記録</div>
+      <div class="after"><span class="field-label">AFTER</span>短時間訪問（20分以上30分未満）の実施記録において、同一日同一利用者への複数回実施や頻繁な実施がないことを確認する。</div>
+    </div>
+    <details class="trace">
+      <summary>▸ 原文トレース（条文: 第4の2）</summary>
+      <div class="trace-text">
+        <span class="field-label">新版（2026年改定）</span>
+        <p><mark>標準時間30分〜1時間30分を下回る訪問が同一日同一利用者に複数回等、頻繁に行われる場合は訪問看護の実施と認められない</mark>と規定する。</p>
+      </div>
+    </details>
+    <div class="actions">
+      <form method="post" action="#"><button type="submit" class="btn-secondary">承認</button></form>
+      <form method="post" action="#"><button type="submit" class="btn-secondary" disabled>却下済み</button></form>
+    </div>
+  </article>
+
+  <footer class="run-footer">
+    <h2>配信・出力</h2>
+    <div class="actions">
+      <form method="post" action="#"><button type="submit" class="btn-secondary">FAXプレビューPDFを生成</button></form>
+    </div>
+    <ul class="delivery-list">
+      <li><span>2026-08-14 11:56</span><span>宛先 kanri@example.local ・ チャネル file</span><span class="chip chip-approved">送信済み</span></li>
+      <li><span>2026-08-14 11:56</span><span>宛先 kanri@example.local ・ チャネル file</span><span class="chip chip-pending">送信待ち</span></li>
+    </ul>
+  </footer>
+</main>
+</body>
+</html>

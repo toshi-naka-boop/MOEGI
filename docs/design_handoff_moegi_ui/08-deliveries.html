@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>配信キュー — MOEGI</title>
+<style>
+:root {
+  --ink:#333A32; --ink-soft:#565F4F;
+  --paper:#FAF9F2; --paper-raised:#FFFFFF; --line:#DDE0D2;
+  --moegi:#007B43; --moegi-ink:#FFFFFF; --moegi-hover:#00693A;
+  --moegi-soft:#EEF3E1; --moegi-deep:#00532F; --moegi-accent:#AACF53;
+  --link:#007B43; --link-hover:#00532F; --focus:#007B43;
+  --warn:#8A5E00; --warn-soft:#FBF1E2; --warn-icon:#F8B500;
+  --status-approved:#2E6E45; --status-approved-bg:#EAF4EA;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:#E9ECE0; --ink-soft:#ADB69D;
+    --paper:#15180F; --paper-raised:#1E2216; --line:#3A4130;
+    --moegi:#A9CE58; --moegi-ink:#1C2114; --moegi-hover:#C0DC82;
+    --moegi-soft:#262C1B; --moegi-deep:#C4DE85; --moegi-accent:#AACF53;
+    --link:#C4DE85; --link-hover:#E0EDBC; --focus:#A9CE58;
+    --warn:#E5B45B; --warn-soft:#2E2716; --warn-icon:#F8B500;
+    --status-approved:#9CCB8B; --status-approved-bg:#22311F;
+  }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif; font-size:15px; line-height:1.75; }
+main { max-width:880px; margin:0 auto; padding:20px 20px 72px; }
+a { color:var(--link); text-underline-offset:3px; }
+a:hover { color:var(--link-hover); }
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:2px; }
+h1 { font-size:24px; line-height:1.4; margin:20px 0 4px; }
+.page-sub { font-size:13px; color:var(--ink-soft); margin:0 0 20px; }
+.home-nav { font-size:14px; padding-top:4px; }
+.home-nav a { display:inline-flex; align-items:center; min-height:44px; }
+/* 送信待ちの強調 */
+.pending-summary {
+  display:flex; align-items:center; gap:14px;
+  background:var(--warn-soft); border:1.5px solid var(--warn-icon);
+  border-radius:12px; padding:16px 20px; margin-bottom:8px;
+}
+.pending-summary .count { font-size:32px; font-weight:700; color:var(--warn); line-height:1; }
+.pending-summary .desc { font-size:14px; }
+.pending-summary .desc strong { display:block; font-size:15px; }
+.auto-note { font-size:13px; color:var(--ink-soft); margin:0 0 24px; }
+/* 一覧 */
+.run-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.run-list li { background:var(--paper-raised); border:1px solid var(--line); border-radius:8px; padding:12px 16px; display:grid; grid-template-columns:auto 1fr auto; gap:4px 16px; align-items:center; font-size:14px; }
+.run-list li.pending { border-left:4px solid var(--warn-icon); }
+.chip { display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:700; border-radius:999px; padding:1px 12px; justify-self:end; }
+.chip-sent { background:var(--status-approved-bg); color:var(--status-approved); }
+.chip-pending { background:var(--warn-soft); color:var(--warn); }
+.delivery-when { font-size:13px; color:var(--ink-soft); font-variant-numeric:tabular-nums; }
+.delivery-meta { grid-column:1 / -1; font-size:12px; color:var(--ink-soft); }
+/* 空状態 */
+.state-review { margin-top:56px; border-top:2px dashed var(--line); padding-top:24px; }
+.state-review h2 { font-size:16px; color:var(--ink-soft); margin:0 0 12px; }
+.empty-state { background:var(--paper-raised); border:1px dashed var(--line); border-radius:12px; padding:40px 20px; text-align:center; }
+.empty-state .empty-icon { font-size:32px; display:block; margin-bottom:8px; }
+.empty-state p { margin:0; color:var(--ink-soft); font-size:14px; }
+.empty-state p strong { color:var(--ink); font-size:16px; }
+@media (max-width:600px) {
+  main { padding:16px 16px 64px; }
+  body { font-size:16px; }
+  .run-list li { grid-template-columns:1fr auto; }
+}
+</style>
+</head>
+<body>
+<main>
+  <nav class="home-nav"><a href="#">← MOEGI ホーム</a></nav>
+
+  <h1>配信キュー</h1>
+  <p class="page-sub">承認済みの変更が現場の記録画面に届くまでの状況です。</p>
+
+  <div class="pending-summary">
+    <span class="count">2</span>
+    <span class="desc"><strong>送信待ちがあります</strong>回線が復帰すると自動で送信されます。操作は必要ありません。</span>
+  </div>
+  <p class="auto-note">送信は自動でリトライされます（このページに再送ボタンはありません — 押さないと届かない仕組みにしないためです）。</p>
+
+  <ul class="run-list">
+    <li class="pending">
+      <span class="delivery-when">2026-08-14 11:56</span>
+      <span>宛先 kanri@example.local ・ チャネル file</span>
+      <span class="chip chip-pending">⏳ 送信待ち</span>
+      <span class="delivery-meta">試行 3回 ・ 次回リトライ 12:10</span>
+    </li>
+    <li class="pending">
+      <span class="delivery-when">2026-08-14 11:56</span>
+      <span>宛先 genba@example.local ・ チャネル file</span>
+      <span class="chip chip-pending">⏳ 送信待ち</span>
+      <span class="delivery-meta">試行 3回 ・ 次回リトライ 12:10</span>
+    </li>
+    <li>
+      <span class="delivery-when">2026-08-14 11:56</span>
+      <span>宛先 kanri@example.local ・ チャネル file</span>
+      <span class="chip chip-sent">✓ 送信済み</span>
+      <span class="delivery-meta">試行 1回 ・ 送信 11:56:12</span>
+    </li>
+    <li>
+      <span class="delivery-when">2026-08-01 09:24</span>
+      <span>宛先 kanri@example.local ・ チャネル file</span>
+      <span class="chip chip-sent">✓ 送信済み</span>
+      <span class="delivery-meta">試行 1回 ・ 送信 09:24:03</span>
+    </li>
+  </ul>
+
+  <section class="state-review" aria-label="状態確認用">
+    <h2>⚠ 状態確認用セクション（レビュー用・実装時に削除）— 空状態</h2>
+    <div class="empty-state">
+      <span class="empty-icon">📮</span>
+      <p><strong>配信はまだありません</strong></p>
+      <p>更新案が承認されると、配信がここに表示されます。</p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

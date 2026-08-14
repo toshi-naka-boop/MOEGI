@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Before / After 比較 — MOEGI</title>
+<style>
+:root {
+  --ink:#333A32; --ink-soft:#565F4F;
+  --paper:#FAF9F2; --paper-raised:#FFFFFF; --line:#DDE0D2;
+  --moegi:#007B43; --moegi-ink:#FFFFFF; --moegi-hover:#00693A;
+  --moegi-soft:#EEF3E1; --moegi-deep:#00532F; --moegi-accent:#AACF53;
+  --link:#007B43; --link-hover:#00532F; --focus:#007B43;
+  --warn:#8A5E00; --warn-soft:#FBF1E2; --warn-icon:#F8B500;
+  --diff-add:#E3F2E9; --diff-add-border:#2E8B6E;
+  --diff-mod:#FEF5E0; --diff-mod-border:#A87400;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:#E9ECE0; --ink-soft:#ADB69D;
+    --paper:#15180F; --paper-raised:#1E2216; --line:#3A4130;
+    --moegi:#A9CE58; --moegi-ink:#1C2114; --moegi-hover:#C0DC82;
+    --moegi-soft:#262C1B; --moegi-deep:#C4DE85; --moegi-accent:#AACF53;
+    --link:#C4DE85; --link-hover:#E0EDBC; --focus:#A9CE58;
+    --warn:#E5B45B; --warn-soft:#2E2716; --warn-icon:#F8B500;
+    --diff-add:#172A24; --diff-add-border:#57B08D;
+    --diff-mod:#2B2413; --diff-mod-border:#D9A03E;
+  }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif; font-size:15px; line-height:1.75; }
+main { max-width:880px; margin:0 auto; padding:20px 20px 72px; }
+a { color:var(--link); text-underline-offset:3px; }
+a:hover { color:var(--link-hover); }
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:2px; }
+h1 { font-size:24px; line-height:1.4; margin:20px 0 4px; }
+h2 { font-size:18px; margin:0 0 12px; }
+.page-sub { font-size:13px; color:var(--ink-soft); margin:0 0 20px; }
+.home-nav { font-size:14px; padding-top:4px; }
+.home-nav a { display:inline-flex; align-items:center; min-height:44px; }
+section { margin-bottom:36px; }
+/* 但し書き（証拠） */
+.evidence-note {
+  display:flex; gap:10px; align-items:baseline;
+  background:var(--moegi-soft); border:1.5px solid var(--moegi);
+  border-radius:8px; padding:12px 16px; font-size:15px; font-weight:700;
+  margin-bottom:24px;
+}
+.evidence-note small { font-weight:400; font-size:13px; color:var(--ink-soft); }
+/* 比較カラム */
+.diff { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.diff .before, .diff .after { background:var(--paper-raised); border:1px solid var(--line); border-radius:12px; padding:16px; }
+.diff .after { border-color:var(--moegi); }
+.col-head { font-size:13px; font-weight:700; color:var(--ink-soft); margin:0 0 10px; display:flex; align-items:center; gap:8px; }
+.diff .after .col-head { color:var(--moegi-deep); }
+.check-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; font-size:14px; }
+.check-list li { padding:8px 12px; border-radius:6px; border:1px solid transparent; }
+.check-list li.hl-mod { background:var(--diff-mod); border-color:var(--diff-mod-border); }
+.check-list li.hl-add { background:var(--diff-add); border-color:var(--diff-add-border); }
+.kind { display:inline-flex; font-size:11px; font-weight:700; border-radius:4px; padding:0 6px; margin-right:6px; background:var(--paper-raised); }
+.kind.mod { color:var(--warn); border:1px solid var(--diff-mod-border); }
+.kind.add { color:var(--diff-add-border); border:1px solid var(--diff-add-border); }
+/* 構造化結果の比較 */
+.trace-text { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px 14px; font-size:13px; color:var(--ink-soft); margin-bottom:16px; }
+.trace-text .pseudo { background:var(--moegi-soft); border-bottom:2px solid var(--moegi-accent); border-radius:3px; padding:0 4px; font-weight:600; color:var(--ink); white-space:nowrap; }
+.result-row { font-size:13px; padding:6px 10px; border-bottom:1px solid var(--line); display:flex; gap:8px; }
+.result-row:last-child { border-bottom:0; }
+.result-row .item { flex:1; }
+.result-row .val { color:var(--ink-soft); }
+.result-row.hl-add { background:var(--diff-add); }
+.chip { display:inline-flex; font-size:11px; font-weight:700; border-radius:999px; padding:0 10px; flex:none; align-self:center; }
+.chip-filled { background:var(--moegi-soft); color:var(--moegi-deep); }
+.chip-empty { background:var(--paper); border:1px solid var(--line); color:var(--ink-soft); }
+@media (max-width:600px) {
+  main { padding:16px 16px 64px; }
+  body { font-size:16px; }
+  .diff { grid-template-columns:1fr; }
+}
+</style>
+</head>
+<body>
+<main>
+  <nav class="home-nav"><a href="#">← MOEGI ホーム</a></nav>
+
+  <h1>Before / After 比較</h1>
+  <p class="page-sub">run_id e54d51999e1b481b9fa0fc19fbe400cb ・ 対象条文 第4の2</p>
+
+  <div class="evidence-note">🎙 <span>入力音声は同一。差はチェックリストのみ。<br><small>同じ発話を改定前後のチェックリストで構造化し、結果の違いだけを比較しています。</small></span></div>
+
+  <section>
+    <h2>チェックリストの変更点</h2>
+    <div class="diff">
+      <div class="before">
+        <p class="col-head">改定前（BEFORE）</p>
+        <ul class="check-list">
+          <li>バイタルサインの記録</li>
+          <li class="hl-mod"><span class="kind mod">変</span>指定訪問看護の実施に要した時間の記録</li>
+          <li class="hl-mod"><span class="kind mod">変</span>訪問日数・訪問頻度の記録</li>
+          <li>家族への指導・説明</li>
+          <li class="hl-mod"><span class="kind mod">変</span>特記事項</li>
+        </ul>
+      </div>
+      <div class="after">
+        <p class="col-head">改定後（AFTER）</p>
+        <ul class="check-list">
+          <li>バイタルサインの記録</li>
+          <li class="hl-mod"><span class="kind mod">変</span>実施時間を記録し、標準実施時間を下回る場合はやむを得ない事情を確認・記録</li>
+          <li class="hl-mod"><span class="kind mod">変</span>訪問日数・訪問頻度の記録＋頻回の短時間訪問がないことの確認</li>
+          <li>家族への指導・説明</li>
+          <li class="hl-add"><span class="kind add">＋</span>特記事項＋短時間訪問の頻回実施の確認結果を記載</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>同じ発話の構造化結果</h2>
+    <div class="trace-text"><span class="pseudo">PATIENT_001</span>さん、25分の訪問。血圧128の76、体温36.5度。本日2回目の訪問、ご本人の希望により短時間で実施。</div>
+    <div class="diff">
+      <div class="before">
+        <p class="col-head">改定前のチェックリストで構造化</p>
+        <div class="result-row"><span class="item">実施時間の記録</span><span class="val">25分</span><span class="chip chip-filled">✓ 記入</span></div>
+        <div class="result-row"><span class="item">訪問日数・訪問頻度</span><span class="val">本日2回目</span><span class="chip chip-filled">✓ 記入</span></div>
+        <div class="result-row"><span class="item">特記事項</span><span class="val">—</span><span class="chip chip-empty">－ 未記入</span></div>
+      </div>
+      <div class="after">
+        <p class="col-head">改定後のチェックリストで構造化</p>
+        <div class="result-row"><span class="item">実施時間＋標準時間未満の事情確認</span><span class="val">25分・本人希望</span><span class="chip chip-filled">✓ 記入</span></div>
+        <div class="result-row"><span class="item">訪問頻度＋頻回短時間訪問の確認</span><span class="val">本日2回目・要確認</span><span class="chip chip-filled">✓ 記入</span></div>
+        <div class="result-row hl-add"><span class="item">特記事項（確認結果の記載）</span><span class="val">本人希望による短時間訪問と記載</span><span class="chip chip-filled">✓ 記入</span></div>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

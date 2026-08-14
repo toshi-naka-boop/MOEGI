@@ -1,0 +1,84 @@
+/* MOEGI 統一デザイントークン v1.2（最終版）
+   方針: ui-brief §2 のトークン名を維持。値はスタイルガイドv1.0と統合。
+   文字色に使う組み合わせはすべて WCAG AA (4.5:1) 実測済み。 */
+:root {
+  /* 地と文字 */
+  --ink: #333A32;              /* 本文（緑がかったチャコール） 11.1:1 on paper */
+  --ink-soft: #565F4F;         /* 補助テキスト 6.3:1 */
+  --paper: #FAF9F2;            /* 背景（生成りの紙） */
+  --paper-raised: #FFFFFF;     /* カード面 */
+  --line: #DDE0D2;             /* 罫線 */
+  /* ブランド緑（2系統） */
+  --moegi: #007B43;            /* 主ボタン地（常磐緑）。--moegi-ink を載せる */
+  --moegi-ink: #FFFFFF;        /* 主ボタンの文字 5.4:1 */
+  --moegi-hover: #00693A;      /* 主ボタンhover地。--moegi-ink 6.8:1 */
+  --moegi-soft: #EEF3E1;       /* 淡い面（ink を載せて 10.4:1） */
+  --moegi-deep: #00532F;       /* 押下・強調 8.7:1 */
+  --moegi-accent: #AACF53;     /* 萌黄。装飾・タグ地・ハイライト専用。文字色に使わない */
+  --link: #007B43;             /* リンク 5.1:1 on paper */
+  --link-hover: #00532F;       /* 8.7:1 */
+  --focus: #007B43;            /* フォーカスリング（2px solid, offset 2px） */
+  /* セマンティック */
+  --warn: #8A5E00;             /* 注意テキスト 5.4:1（山吹の濃色） */
+  --warn-soft: #FBF1E2;
+  --warn-icon: #F8B500;        /* ★新規: 山吹。アイコン・図形専用。文字不可 */
+  --danger: #C0242F;           /* 危険テキスト 5.6:1 */
+  --danger-soft: #FBEAEA;      /* ★新規 */
+  /* ステータスチップ */
+  --status-approved: #2E6E45;  --status-approved-bg: #EAF4EA;   /* 5.4:1 */
+  --status-rejected: #5F6557;  --status-rejected-bg: #F1F1EC;   /* 5.3:1 */
+  --status-edited:   #33587F;  --status-edited-bg:   #EAF1F8;   /* 6.5:1 */
+  /* Privacy Gate 4状態 */
+  --gate-passed:  #2E6E45;  --gate-passed-bg:  #EAF4EA;  /* 落ち着いた肯定。淡い緑チップのみ */
+  --gate-review:  #8A5E00;  --gate-review-bg:  #FBF1E2;  /* 注意 */
+  --gate-blocked: #C0242F;  --gate-blocked-bg: #FBEAEA;  /* 強い停止 */
+  --gate-blocked-fill: #A8391F;                          /* 停止バナーの塗り。白字 6.4:1 */
+  --gate-failed:  #C0242F;  --gate-failed-bg:  #FBEAEA;  /* 停止と同等（アイコンで区別） */
+  /* 通達Diff（ブランド緑と別系統。必ずアイコン・ラベル併用） */
+  --diff-add: #E3F2E9;  --diff-add-border: #2E8B6E;   /* ink 10.1:1 / 枠 3.6:1 */
+  --diff-del: #FBEAEA;  --diff-del-border: #D9333F;   /* ink 10.1:1 / 枠 4.0:1 */
+  --diff-mod: #FEF5E0;  --diff-mod-border: #A87400;   /* ink 10.8:1 / 枠 3.8:1 */
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #E9ECE0;              /* 15.0:1 */
+    --ink-soft: #ADB69D;         /* 8.5:1 */
+    --paper: #15180F;            /* 深い墨緑 */
+    --paper-raised: #1E2216;
+    --line: #3A4130;
+    --moegi: #A9CE58;            /* ダークでは萌黄が主ボタン地 */
+    --moegi-ink: #1C2114;        /* 9.1:1 */
+    --moegi-hover: #C0DC82;      /* --moegi-ink 10.8:1 */
+    --moegi-soft: #262C1B;
+    --moegi-deep: #C4DE85;
+    --moegi-accent: #AACF53;
+    --link: #C4DE85;             /* 12.1:1 */
+    --link-hover: #E0EDBC;       /* 14.5:1 */
+    --focus: #A9CE58;
+    --warn: #E5B45B;             /* 8.5:1 on raised */
+    --warn-soft: #2E2716;
+    --warn-icon: #F8B500;
+    --danger: #E98973;           /* 6.4:1 on raised */
+    --danger-soft: #33201B;
+    --status-approved: #9CCB8B;  --status-approved-bg: #22311F;  /* 7.4:1 */
+    --status-rejected: #A9AFA0;  --status-rejected-bg: #2A2D24;  /* 6.2:1 */
+    --status-edited:   #8FB4DE;  --status-edited-bg:   #1F2A38;  /* 6.7:1 */
+    --gate-passed:  #9CCB8B;  --gate-passed-bg:  #22311F;
+    --gate-review:  #E5B45B;  --gate-review-bg:  #2E2716;
+    --gate-blocked: #E98973;  --gate-blocked-bg: #33201B;
+    --gate-blocked-fill: #A8391F;                /* 白字 6.4:1（両モード共通） */
+    --gate-failed:  #E98973;  --gate-failed-bg:  #33201B;
+    /* Diff（追加は青緑寄りにして gate-passed / 萌黄と区別） */
+    --diff-add: #172A24;  --diff-add-border: #57B08D;   /* ink 12.6:1 / 枠 5.7:1 */
+    --diff-del: #2E1A1D;  --diff-del-border: #D96A6A;   /* ink 13.7:1 / 枠 4.9:1 */
+    --diff-mod: #2B2413;  --diff-mod-border: #D9A03E;   /* ink 12.9:1 / 枠 6.6:1 */
+  }
+}
+/* 役割→トークン対応（両モードで同一トークン名を参照）:
+   リンク           color: var(--link)
+   リンクhover      color: var(--link-hover)
+   主ボタン地       background: var(--moegi)
+   主ボタン文字     color: var(--moegi-ink)
+   主ボタンhover地  background: var(--moegi-hover)
+   主ボタン押下     background: var(--moegi-deep)（ライト）/ var(--moegi-hover)（ダークは同値運用可）
+   フォーカスリング outline: 2px solid var(--focus); outline-offset: 2px */

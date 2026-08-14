@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>日報の結果 — MOEGI</title>
+<style>
+:root {
+  --ink:#333A32; --ink-soft:#565F4F;
+  --paper:#FAF9F2; --paper-raised:#FFFFFF; --line:#DDE0D2;
+  --moegi:#007B43; --moegi-ink:#FFFFFF; --moegi-hover:#00693A;
+  --moegi-soft:#EEF3E1; --moegi-deep:#00532F; --moegi-accent:#AACF53;
+  --link:#007B43; --link-hover:#00532F; --focus:#007B43;
+  --warn:#8A5E00; --warn-soft:#FBF1E2; --warn-icon:#F8B500;
+  --danger:#C0242F; --danger-soft:#FBEAEA;
+  --gate-passed:#2E6E45;  --gate-passed-bg:#EAF4EA;
+  --gate-review:#8A5E00;  --gate-review-bg:#FBF1E2;
+  --gate-blocked:#C0242F; --gate-blocked-bg:#FBEAEA;
+  --gate-blocked-fill:#A8391F;
+  --gate-failed:#C0242F;  --gate-failed-bg:#FBEAEA;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:#E9ECE0; --ink-soft:#ADB69D;
+    --paper:#15180F; --paper-raised:#1E2216; --line:#3A4130;
+    --moegi:#A9CE58; --moegi-ink:#1C2114; --moegi-hover:#C0DC82;
+    --moegi-soft:#262C1B; --moegi-deep:#C4DE85; --moegi-accent:#AACF53;
+    --link:#C4DE85; --link-hover:#E0EDBC; --focus:#A9CE58;
+    --warn:#E5B45B; --warn-soft:#2E2716; --warn-icon:#F8B500;
+    --danger:#E98973; --danger-soft:#33201B;
+    --gate-passed:#9CCB8B;  --gate-passed-bg:#22311F;
+    --gate-review:#E5B45B;  --gate-review-bg:#2E2716;
+    --gate-blocked:#E98973; --gate-blocked-bg:#33201B;
+    --gate-blocked-fill:#A8391F;
+    --gate-failed:#E98973;  --gate-failed-bg:#33201B;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif;
+  font-size:16px; line-height:1.75;
+}
+main { max-width:880px; margin:0 auto; padding:16px 16px 72px; }
+a { color:var(--link); text-underline-offset:3px; }
+a:hover { color:var(--link-hover); }
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:2px; }
+h1 { font-size:24px; line-height:1.4; margin:20px 0 4px; }
+h2 { font-size:18px; line-height:1.5; margin:0 0 12px; }
+.page-sub { font-size:13px; color:var(--ink-soft); margin:0 0 20px; }
+.home-nav { font-size:14px; padding-top:4px; }
+.home-nav a { display:inline-flex; align-items:center; min-height:44px; }
+.queue-note {
+  display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
+  background:var(--warn-soft); border-left:4px solid var(--warn-icon);
+  border-radius:0 8px 8px 0; padding:10px 16px; margin-top:8px; font-size:14px;
+}
+section { margin-bottom:32px; }
+/* ---- Privacy Gate サマリカード ---- */
+.gate-summary {
+  border:1px solid var(--line); border-radius:12px;
+  background:var(--paper-raised); padding:16px; margin-bottom:20px;
+}
+.gate-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.gate-icon { font-size:20px; flex:none; }
+.gate-title { font-size:16px; font-weight:700; }
+.gate-chip {
+  display:inline-flex; align-items:center; gap:4px;
+  font-size:12px; font-weight:700; border-radius:999px; padding:2px 12px;
+}
+.gate-body { font-size:14px; color:var(--ink-soft); margin:8px 0 0; }
+.gate-detect { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.detect-chip {
+  font-size:12px; font-weight:600; border-radius:999px; padding:2px 12px;
+  background:var(--paper); border:1px solid var(--line); color:var(--ink-soft);
+}
+.gate-summary.passed { border-color:var(--gate-passed); }
+.gate-summary.passed .gate-chip { background:var(--gate-passed-bg); color:var(--gate-passed); }
+.gate-summary.review { border-color:var(--gate-review); background:var(--gate-review-bg); }
+.gate-summary.review .gate-chip { background:var(--paper-raised); color:var(--gate-review); }
+.gate-summary.review .gate-body { color:var(--ink); }
+.gate-summary.blocked, .gate-summary.failed {
+  border-color:var(--gate-blocked-fill);
+  background:var(--gate-blocked-fill); color:#FFFFFF;
+}
+.gate-summary.blocked .gate-body, .gate-summary.failed .gate-body { color:#FFFFFF; opacity:.92; }
+.gate-summary.blocked .gate-chip, .gate-summary.failed .gate-chip { background:#FFFFFF; color:var(--gate-blocked-fill); }
+.gate-summary.blocked .detect-chip, .gate-summary.failed .detect-chip {
+  background:transparent; border-color:rgba(255,255,255,.55); color:#FFFFFF;
+}
+/* ---- 保存完了 ---- */
+.save-note {
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  background:var(--moegi-soft); border:1px solid var(--line);
+  border-radius:8px; padding:12px 16px; font-size:14px; margin-bottom:32px;
+}
+.save-note a { font-weight:700; margin-left:auto; min-height:44px; display:inline-flex; align-items:center; }
+/* ---- 発話内容 ---- */
+.trace-text {
+  background:var(--paper-raised); border:1px solid var(--line); border-radius:8px;
+  padding:14px 16px; font-size:14px; line-height:1.9;
+}
+.trace-text .pseudo {
+  background:var(--moegi-soft); border-bottom:2px solid var(--moegi-accent);
+  border-radius:3px; padding:0 4px; font-weight:600; white-space:nowrap;
+}
+.section-hint { font-size:12px; color:var(--ink-soft); margin:6px 0 0; }
+/* ---- 日報テーブル（モバイル: 縦2段カード） ---- */
+.nippou-table { display:flex; flex-direction:column; gap:8px; }
+.nippou-row {
+  background:var(--paper-raised); border:1px solid var(--line);
+  border-radius:8px; padding:10px 14px;
+}
+.nippou-item { font-size:13px; font-weight:700; display:block; }
+.nippou-value { display:flex; align-items:baseline; gap:10px; margin-top:2px; font-size:14px; }
+.nippou-row.empty .nippou-value { color:var(--ink-soft); }
+.chip {
+  display:inline-flex; align-items:center; gap:4px; flex:none;
+  font-size:11px; font-weight:700; border-radius:999px; padding:1px 10px;
+}
+.chip-filled { background:var(--gate-passed-bg); color:var(--gate-passed); }
+.chip-empty  { background:var(--paper); border:1px solid var(--line); color:var(--ink-soft); }
+/* ---- 評価・SOAP ---- */
+.eval-list, .soap-list { display:flex; flex-direction:column; gap:8px; }
+.eval-row, .soap-row {
+  background:var(--paper-raised); border:1px solid var(--line);
+  border-radius:8px; padding:10px 14px; font-size:14px;
+}
+.eval-label { font-size:12px; font-weight:700; color:var(--ink-soft); display:block; }
+.soap-key {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:28px; height:28px; border-radius:8px; flex:none;
+  background:var(--moegi-soft); color:var(--moegi-deep);
+  font-weight:700; font-size:14px; margin-right:10px;
+}
+.soap-row { display:flex; align-items:flex-start; }
+.soap-row p { margin:0; }
+/* ---- 確認用 ---- */
+.state-review {
+  margin-top:56px; border-top:2px dashed var(--line); padding-top:24px;
+  display:flex; flex-direction:column; gap:16px;
+}
+.state-review h2 { font-size:16px; color:var(--ink-soft); }
+.state-review .state-label { font-size:13px; font-weight:700; margin:0 0 8px; }
+@media (min-width:600px) {
+  main { padding:20px 20px 72px; }
+  .nippou-row { display:grid; grid-template-columns:260px 1fr; gap:12px; align-items:baseline; }
+  .nippou-item { font-weight:600; }
+  .nippou-value { margin-top:0; }
+}
+</style>
+</head>
+<body>
+<main>
+  <nav class="home-nav"><a href="#">← MOEGI ホーム</a></nav>
+
+  <div class="queue-note"><span><strong>送信待ち 2 件</strong>。回線が復帰すると自動で送信されます。</span></div>
+
+  <h1>日報の結果</h1>
+  <p class="page-sub">P-100234 ・ 訪問日 2026-08-15 ・ 構造化 12:04</p>
+
+  <div class="gate-summary passed">
+    <div class="gate-head">
+      <span class="gate-icon">🔎</span>
+      <span class="gate-title">Privacy Gate: 検査通過</span>
+      <span class="gate-chip">passed</span>
+    </div>
+    <p class="gate-body">直接識別子を仮名化しました。仮名化後も病状・服薬などの要配慮個人情報は残ります。内容を確認してから共有してください。</p>
+    <div class="gate-detect">
+      <span class="detect-chip">氏名 2件</span>
+      <span class="detect-chip">続柄 1件</span>
+    </div>
+  </div>
+
+  <div class="save-note">✓ 日報とSOAPを保存しました。<a href="#">月報を見る →</a></div>
+
+  <section>
+    <h2>仮名化済みの発話内容</h2>
+    <div class="trace-text"><span class="pseudo">PATIENT_001</span>さん、血圧128の76、体温36.5度、脈拍72、SpO2 97%。左踵の褥瘡はサイズ縮小し、浸出液なし。創傷処置を実施。<span class="pseudo">長女</span>さんに服薬管理の方法を説明し、理解を確認。次回訪問時に再評価予定。</div>
+    <p class="section-hint">ハイライト部分が仮名化された箇所です。</p>
+  </section>
+
+  <section>
+    <h2>日報</h2>
+    <div class="nippou-table">
+      <div class="nippou-row">
+        <span class="nippou-item">バイタルサインの記録</span>
+        <span class="nippou-value"><span class="chip chip-filled">✓ 記入済み</span>血圧 128/76 ・ 体温 36.5℃ ・ 脈拍 72 ・ SpO2 97%</span>
+      </div>
+      <div class="nippou-row">
+        <span class="nippou-item">実施した処置の内容</span>
+        <span class="nippou-value"><span class="chip chip-filled">✓ 記入済み</span>創傷処置（褥瘡ケア等）: 左踵、サイズ縮小、浸出液なし</span>
+      </div>
+      <div class="nippou-row">
+        <span class="nippou-item">家族への指導・説明</span>
+        <span class="nippou-value"><span class="chip chip-filled">✓ 記入済み</span>長女へ服薬管理の方法を説明、理解を確認</span>
+      </div>
+      <div class="nippou-row empty">
+        <span class="nippou-item">訪問日数・訪問頻度の記録</span>
+        <span class="nippou-value"><span class="chip chip-empty">－ 未記入</span>発話から読み取れませんでした</span>
+      </div>
+      <div class="nippou-row empty">
+        <span class="nippou-item">特記事項</span>
+        <span class="nippou-value"><span class="chip chip-empty">－ 未記入</span>発話から読み取れませんでした</span>
+      </div>
+    </div>
+    <p class="section-hint">未記入の項目は月報作成前に追記できます。</p>
+  </section>
+
+  <section>
+    <h2>評価</h2>
+    <div class="eval-list">
+      <div class="eval-row"><span class="eval-label">看護目標</span>褥瘡の治癒促進と家族による服薬管理の自立</div>
+      <div class="eval-row"><span class="eval-label">達成度</span>一部達成（褥瘡は縮小傾向、服薬管理は指導継続中）</div>
+      <div class="eval-row"><span class="eval-label">効果</span>創傷処置の継続により褥瘡サイズが縮小。家族の理解度が向上</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>SOAP</h2>
+    <div class="soap-list">
+      <div class="soap-row"><span class="soap-key">S</span><p>「かかとの傷は痛くない」との発言。長女より服薬の手順に不安があるとの訴え。</p></div>
+      <div class="soap-row"><span class="soap-key">O</span><p>血圧128/76、体温36.5℃、脈拍72、SpO2 97%。左踵褥瘡はサイズ縮小、浸出液なし。</p></div>
+      <div class="soap-row"><span class="soap-key">A</span><p>褥瘡は治癒過程にあり、現行の処置継続が妥当。服薬管理は家族支援の継続が必要。</p></div>
+      <div class="soap-row"><span class="soap-key">P</span><p>創傷処置を継続。次回訪問時に褥瘡を再評価。長女への服薬指導を継続。</p></div>
+    </div>
+  </section>
+
+  <section class="state-review" aria-label="状態確認用">
+    <h2>⚠ 状態確認用セクション（レビュー用・実装時に削除）</h2>
+    <div>
+      <p class="state-label">passed — 落ち着いた肯定（枠のみ緑・塗りなし）</p>
+      <div class="gate-summary passed">
+        <div class="gate-head"><span class="gate-icon">🔎</span><span class="gate-title">Privacy Gate: 検査通過</span><span class="gate-chip">passed</span></div>
+        <p class="gate-body">直接識別子を仮名化しました。仮名化後も病状・服薬などの要配慮個人情報は残ります。</p>
+        <div class="gate-detect"><span class="detect-chip">氏名 2件</span><span class="detect-chip">続柄 1件</span></div>
+      </div>
+    </div>
+    <div>
+      <p class="state-label">review_required — 警告トーン（面が山吹）</p>
+      <div class="gate-summary review">
+        <div class="gate-head"><span class="gate-icon">⚠️</span><span class="gate-title">Privacy Gate: 確認が必要です</span><span class="gate-chip">review_required</span></div>
+        <p class="gate-body">個人を特定し得る情報が残っている可能性があります。下記の検出結果を確認し、問題がなければ承認してください。</p>
+        <div class="gate-detect"><span class="detect-chip">住所らしき表現 1件</span></div>
+      </div>
+    </div>
+    <div>
+      <p class="state-label">blocked — 唯一の赤塗りバナー（■ 停止アイコン）</p>
+      <div class="gate-summary blocked">
+        <div class="gate-head"><span class="gate-icon">⛔</span><span class="gate-title">Privacy Gate: 処理を停止しました</span><span class="gate-chip">blocked</span></div>
+        <p class="gate-body">記録に残せない情報を検出したため、構造化を中止しました。データは保存されていません。</p>
+        <div class="gate-detect"><span class="detect-chip">保険証番号 1件</span></div>
+      </div>
+    </div>
+    <div>
+      <p class="state-label">failed — 停止と同等（アイコンで区別）</p>
+      <div class="gate-summary failed">
+        <div class="gate-head"><span class="gate-icon">❓</span><span class="gate-title">Privacy Gate: 検査を完了できませんでした</span><span class="gate-chip">failed</span></div>
+        <p class="gate-body">検査自体が完了しなかったため、構造化を中止しました。データは保存されていません。時間をおいて再度お試しください。</p>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

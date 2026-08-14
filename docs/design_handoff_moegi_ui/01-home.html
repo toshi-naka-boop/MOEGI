@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>MOEGI ホーム</title>
+<style>
+:root {
+  --ink:#333A32; --ink-soft:#565F4F;
+  --paper:#FAF9F2; --paper-raised:#FFFFFF; --line:#DDE0D2;
+  --moegi:#007B43; --moegi-ink:#FFFFFF; --moegi-hover:#00693A;
+  --moegi-soft:#EEF3E1; --moegi-deep:#00532F; --moegi-accent:#AACF53;
+  --link:#007B43; --link-hover:#00532F; --focus:#007B43;
+  --warn:#8A5E00; --warn-soft:#FBF1E2; --warn-icon:#F8B500;
+  --status-approved:#2E6E45; --status-approved-bg:#EAF4EA;
+  --status-rejected:#5F6557; --status-rejected-bg:#F1F1EC;
+  --status-edited:#33587F;   --status-edited-bg:#EAF1F8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:#E9ECE0; --ink-soft:#ADB69D;
+    --paper:#15180F; --paper-raised:#1E2216; --line:#3A4130;
+    --moegi:#A9CE58; --moegi-ink:#1C2114; --moegi-hover:#C0DC82;
+    --moegi-soft:#262C1B; --moegi-deep:#C4DE85; --moegi-accent:#AACF53;
+    --link:#C4DE85; --link-hover:#E0EDBC; --focus:#A9CE58;
+    --warn:#E5B45B; --warn-soft:#2E2716; --warn-icon:#F8B500;
+    --status-approved:#9CCB8B; --status-approved-bg:#22311F;
+    --status-rejected:#A9AFA0; --status-rejected-bg:#2A2D24;
+    --status-edited:#8FB4DE;   --status-edited-bg:#1F2A38;
+  }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif; font-size:15px; line-height:1.75; }
+main { max-width:880px; margin:0 auto; padding:20px 20px 72px; }
+a { color:var(--link); text-underline-offset:3px; }
+a:hover { color:var(--link-hover); }
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:2px; }
+h1 { font-size:26px; line-height:1.4; margin:20px 0 4px; display:flex; align-items:center; gap:12px; }
+.brand-mark { width:34px; height:34px; border-radius:8px; background:var(--moegi-accent); color:#333A32; display:inline-flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; flex:none; }
+.page-sub { font-size:13px; color:var(--ink-soft); margin:0 0 24px; }
+h2 { font-size:18px; margin:0 0 12px; }
+.queue-note { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; background:var(--warn-soft); border-left:4px solid var(--warn-icon); border-radius:0 8px 8px 0; padding:10px 16px; margin-top:8px; font-size:14px; }
+section { margin-bottom:36px; }
+/* 分析実行 */
+.run-form { background:var(--paper-raised); border:1px solid var(--line); border-radius:12px; padding:16px; display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap; }
+.run-form > div { flex:1 1 320px; }
+.field-label { display:block; font-size:13px; font-weight:700; margin-bottom:6px; }
+select { width:100%; font:inherit; font-size:15px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:0 12px; min-height:44px; }
+select:focus-visible { outline:2px solid var(--focus); outline-offset:0; border-color:var(--focus); }
+.btn-primary { font:inherit; font-size:15px; font-weight:700; cursor:pointer; min-height:44px; padding:0 24px; border-radius:8px; border:1.5px solid transparent; background:var(--moegi); color:var(--moegi-ink); flex:none; }
+.btn-primary:hover { background:var(--moegi-hover); }
+.btn-primary:active { background:var(--moegi-deep); }
+.run-hint { font-size:12px; color:var(--ink-soft); margin:8px 0 0; flex-basis:100%; }
+.progress-state { display:none; }
+.run-form.is-submitting .btn-primary { display:none; }
+.run-form.is-submitting .progress-state { display:flex; align-items:center; gap:12px; min-height:44px; padding:0 18px; border-radius:8px; background:var(--moegi-soft); border:1.5px solid var(--moegi); font-size:14px; font-weight:700; color:var(--moegi-deep); position:relative; overflow:hidden; flex:1; }
+.progress-state::before { content:""; position:absolute; inset:0; background:linear-gradient(90deg,transparent,color-mix(in oklch,var(--moegi) 18%,transparent),transparent); animation:sweep 1.6s linear infinite; }
+@keyframes sweep { from{transform:translateX(-100%);} to{transform:translateX(100%);} }
+.spinner { width:18px; height:18px; flex:none; border-radius:50%; border:2.5px solid var(--line); border-top-color:var(--moegi); animation:spin .9s linear infinite; }
+@keyframes spin { to{transform:rotate(360deg);} }
+.progress-state small { font-weight:400; color:var(--ink-soft); font-size:12px; }
+@media (prefers-reduced-motion: reduce) { .progress-state::before,.spinner { animation:none !important; } }
+/* 実行一覧 */
+.run-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.run-list li { background:var(--paper-raised); border:1px solid var(--line); border-radius:8px; padding:10px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; font-size:14px; }
+.run-list .run-when { color:var(--ink-soft); font-size:13px; flex:none; }
+.run-list .run-target { font-weight:600; flex:1 1 200px; }
+.chip { display:inline-flex; align-items:center; font-size:12px; font-weight:700; border-radius:999px; padding:1px 12px; flex:none; }
+.chip-progress { background:var(--status-edited-bg); color:var(--status-edited); }
+.chip-done { background:var(--status-approved-bg); color:var(--status-approved); }
+.run-list a { font-weight:700; min-height:44px; display:inline-flex; align-items:center; margin-left:auto; }
+/* 導線 */
+.nav-cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+.nav-card { background:var(--paper-raised); border:1px solid var(--line); border-radius:12px; padding:16px; text-decoration:none; display:flex; flex-direction:column; gap:2px; min-height:44px; }
+.nav-card:hover { background:var(--moegi-soft); border-color:var(--moegi); }
+.nav-card .nav-icon { font-size:20px; }
+.nav-card .nav-name { font-weight:700; color:var(--ink); }
+.nav-card .nav-desc { font-size:12px; color:var(--ink-soft); line-height:1.5; }
+/* 空状態 */
+.state-review { margin-top:56px; border-top:2px dashed var(--line); padding-top:24px; }
+.state-review h2 { font-size:16px; color:var(--ink-soft); }
+.empty-state { background:var(--paper-raised); border:1px dashed var(--line); border-radius:12px; padding:40px 20px; text-align:center; }
+.empty-state .empty-icon { font-size:32px; display:block; margin-bottom:8px; }
+.empty-state p { margin:0; color:var(--ink-soft); font-size:14px; }
+.empty-state p strong { color:var(--ink); font-size:16px; }
+@media (max-width:600px) {
+  main { padding:16px 16px 64px; }
+  body { font-size:16px; }
+  .run-form > div { flex-basis:100%; }
+  .btn-primary { width:100%; min-height:48px; }
+  .nav-cards { grid-template-columns:1fr 1fr; }
+  .run-list a { margin-left:0; }
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="queue-note"><span><strong>送信待ち 2 件</strong>。回線が復帰すると自動で送信されます。</span> <a href="#">配信キューを見る</a></div>
+
+  <h1>MOEGI</h1>
+  <p class="page-sub">通達の改定をチェックリストに反映し、承認された変更を現場の記録まで届けます。</p>
+
+  <section>
+    <h2>新しい分析を実行</h2>
+    <form class="run-form" method="post" action="#" onsubmit="this.classList.add('is-submitting')">
+      <div>
+        <label class="field-label" for="target">対象条文</label>
+        <select id="target" name="target">
+          <option selected>第4の2 — 指定訪問看護の実施時間（2026年改定）</option>
+          <option>第4の1 — 訪問看護計画書の作成</option>
+        </select>
+      </div>
+      <button type="submit" class="btn-primary">分析を実行</button>
+      <div class="progress-state" role="status">
+        <span class="spinner"></span>
+        <span>更新案を生成中… <small>1分ほどかかる場合があります。画面を閉じないでください。</small></span>
+      </div>
+      <p class="run-hint">改定条文と現行チェックリストを突き合わせ、更新案を生成します（約47秒）。</p>
+    </form>
+  </section>
+
+  <section>
+    <h2>過去の実行</h2>
+    <ul class="run-list">
+      <li>
+        <span class="run-when">2026-08-14 11:52</span>
+        <span class="run-target">第4の2 — 指定訪問看護の実施時間</span>
+        <span class="chip chip-progress">承認待ち 2件</span>
+        <a href="#">更新案を見る →</a>
+      </li>
+      <li>
+        <span class="run-when">2026-08-01 09:20</span>
+        <span class="run-target">第4の1 — 訪問看護計画書の作成</span>
+        <span class="chip chip-done">完了（4件承認）</span>
+        <a href="#">結果を見る →</a>
+      </li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>機能</h2>
+    <div class="nav-cards">
+      <a class="nav-card" href="#"><span class="nav-icon">🎙</span><span class="nav-name">日報の入力</span><span class="nav-desc">音声・テキストから日報とSOAPを作成</span></a>
+      <a class="nav-card" href="#"><span class="nav-icon">📊</span><span class="nav-name">月報</span><span class="nav-desc">1ヶ月分の日報を集計</span></a>
+      <a class="nav-card" href="#"><span class="nav-icon">🔎</span><span class="nav-name">監査記録</span><span class="nav-desc">仮名化処理の記録を確認</span></a>
+      <a class="nav-card" href="#"><span class="nav-icon">📮</span><span class="nav-name">配信キュー</span><span class="nav-desc">承認済み変更の配信状況</span></a>
+    </div>
+  </section>
+
+  <section class="state-review" aria-label="状態確認用">
+    <h2>⚠ 状態確認用セクション（レビュー用・実装時に削除）— 空状態</h2>
+    <div class="empty-state">
+      <span class="empty-icon">🌱</span>
+      <p><strong>まだ分析結果がありません</strong></p>
+      <p>上のフォームから対象条文を選んで、最初の分析を実行してください。</p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

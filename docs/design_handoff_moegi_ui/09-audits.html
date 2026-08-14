@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>仮名化処理の監査記録 — MOEGI</title>
+<style>
+:root {
+  --ink:#333A32; --ink-soft:#565F4F;
+  --paper:#FAF9F2; --paper-raised:#FFFFFF; --line:#DDE0D2;
+  --moegi:#007B43; --moegi-ink:#FFFFFF; --moegi-hover:#00693A;
+  --moegi-soft:#EEF3E1; --moegi-deep:#00532F; --moegi-accent:#AACF53;
+  --link:#007B43; --link-hover:#00532F; --focus:#007B43;
+  --warn:#8A5E00; --warn-soft:#FBF1E2; --warn-icon:#F8B500;
+  --gate-passed:#2E6E45;  --gate-passed-bg:#EAF4EA;
+  --gate-review:#8A5E00;  --gate-review-bg:#FBF1E2;
+  --gate-blocked:#C0242F; --gate-blocked-bg:#FBEAEA;
+  --gate-failed:#C0242F;  --gate-failed-bg:#FBEAEA;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:#E9ECE0; --ink-soft:#ADB69D;
+    --paper:#15180F; --paper-raised:#1E2216; --line:#3A4130;
+    --moegi:#A9CE58; --moegi-ink:#1C2114; --moegi-hover:#C0DC82;
+    --moegi-soft:#262C1B; --moegi-deep:#C4DE85; --moegi-accent:#AACF53;
+    --link:#C4DE85; --link-hover:#E0EDBC; --focus:#A9CE58;
+    --warn:#E5B45B; --warn-soft:#2E2716; --warn-icon:#F8B500;
+    --gate-passed:#9CCB8B;  --gate-passed-bg:#22311F;
+    --gate-review:#E5B45B;  --gate-review-bg:#2E2716;
+    --gate-blocked:#E98973; --gate-blocked-bg:#33201B;
+    --gate-failed:#E98973;  --gate-failed-bg:#33201B;
+  }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif; font-size:15px; line-height:1.75; }
+main { max-width:880px; margin:0 auto; padding:20px 20px 72px; }
+a { color:var(--link); text-underline-offset:3px; }
+a:hover { color:var(--link-hover); }
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:2px; }
+h1 { font-size:24px; line-height:1.4; margin:20px 0 4px; }
+.page-sub { font-size:13px; color:var(--ink-soft); margin:0 0 20px; }
+.home-nav { font-size:14px; padding-top:4px; }
+.home-nav a { display:inline-flex; align-items:center; min-height:44px; }
+.queue-note { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; background:var(--warn-soft); border-left:4px solid var(--warn-icon); border-radius:0 8px 8px 0; padding:10px 16px; margin-top:8px; font-size:14px; }
+/* 監査一覧 */
+.run-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.audit { background:var(--paper-raised); border:1px solid var(--line); border-radius:8px; padding:12px 16px; }
+.audit-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:14px; }
+.audit-when { color:var(--ink-soft); font-size:13px; font-variant-numeric:tabular-nums; }
+.chip { display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:700; border-radius:999px; padding:1px 12px; }
+.chip-passed  { background:var(--gate-passed-bg); color:var(--gate-passed); }
+.chip-review  { background:var(--gate-review-bg); color:var(--gate-review); }
+.chip-blocked { background:var(--gate-blocked-bg); color:var(--gate-blocked); }
+.chip-failed  { background:var(--gate-failed-bg); color:var(--gate-failed); }
+.audit-detects { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+.detect-chip { font-size:12px; font-weight:600; border-radius:999px; padding:1px 12px; background:var(--paper); border:1px solid var(--line); color:var(--ink-soft); }
+.audit-meta { display:flex; gap:6px 20px; flex-wrap:wrap; margin-top:8px; font-size:12px; color:var(--ink-soft); }
+.audit-meta strong { color:var(--ink); font-weight:600; }
+/* 空状態 */
+.state-review { margin-top:56px; border-top:2px dashed var(--line); padding-top:24px; }
+.state-review h2 { font-size:16px; color:var(--ink-soft); margin:0 0 12px; }
+.empty-state { background:var(--paper-raised); border:1px dashed var(--line); border-radius:12px; padding:40px 20px; text-align:center; }
+.empty-state .empty-icon { font-size:32px; display:block; margin-bottom:8px; }
+.empty-state p { margin:0; color:var(--ink-soft); font-size:14px; }
+.empty-state p strong { color:var(--ink); font-size:16px; }
+@media (max-width:600px) {
+  main { padding:16px 16px 64px; }
+  body { font-size:16px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <nav class="home-nav"><a href="#">← MOEGI ホーム</a></nav>
+
+  <div class="queue-note"><span><strong>送信待ち 2 件</strong>。回線が復帰すると自動で送信されます。</span></div>
+
+  <h1>仮名化処理の監査記録</h1>
+  <p class="page-sub">検出した個人情報は種別と件数のみを記録しています。値そのものは保存されません。</p>
+
+  <ul class="run-list">
+    <li class="audit">
+      <div class="audit-head">
+        <span class="audit-when">2026-08-15 12:04:18</span>
+        <span class="chip chip-passed">✓ passed</span>
+      </div>
+      <div class="audit-detects"><span class="detect-chip">氏名 2件</span><span class="detect-chip">続柄 1件</span></div>
+      <div class="audit-meta"><span>処理時間 <strong>1.8秒</strong></span><span>構造化へ <strong>進んだ</strong></span><span>外部送信 <strong>なし</strong></span></div>
+    </li>
+    <li class="audit">
+      <div class="audit-head">
+        <span class="audit-when">2026-08-15 11:41:02</span>
+        <span class="chip chip-blocked">⛔ blocked</span>
+      </div>
+      <div class="audit-detects"><span class="detect-chip">保険証番号 1件</span><span class="detect-chip">氏名 1件</span></div>
+      <div class="audit-meta"><span>処理時間 <strong>1.6秒</strong></span><span>構造化へ <strong>中止</strong></span><span>外部送信 <strong>なし</strong></span></div>
+    </li>
+    <li class="audit">
+      <div class="audit-head">
+        <span class="audit-when">2026-08-14 16:22:47</span>
+        <span class="chip chip-review">⚠ review_required</span>
+      </div>
+      <div class="audit-detects"><span class="detect-chip">住所らしき表現 1件</span></div>
+      <div class="audit-meta"><span>処理時間 <strong>2.1秒</strong></span><span>構造化へ <strong>確認後に進んだ</strong></span><span>外部送信 <strong>なし</strong></span></div>
+    </li>
+    <li class="audit">
+      <div class="audit-head">
+        <span class="audit-when">2026-08-14 09:03:11</span>
+        <span class="chip chip-failed">❓ failed</span>
+      </div>
+      <div class="audit-meta"><span>処理時間 <strong>30.0秒（タイムアウト）</strong></span><span>構造化へ <strong>中止</strong></span><span>外部送信 <strong>なし</strong></span></div>
+    </li>
+  </ul>
+
+  <section class="state-review" aria-label="状態確認用">
+    <h2>⚠ 状態確認用セクション（レビュー用・実装時に削除）— 空状態</h2>
+    <div class="empty-state">
+      <span class="empty-icon">🔎</span>
+      <p><strong>監査記録はまだありません</strong></p>
+      <p>日報の構造化を実行すると、仮名化処理の記録がここに残ります。</p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

@@ -143,127 +143,229 @@ def _pending_delivery_badge() -> str:
     if not pending:
         return ""
     return (
-        f"<p class='run-warning'>📮 <strong>送信待ち {pending} 件</strong>。"
-        "回線が復帰すると自動で送信されます（手動の再送操作は必要ありません）。"
-        " <a href='/deliveries'>配信キューを見る</a></p>"
+        f"<div class='queue-note'><span><strong>送信待ち {pending} 件</strong>。"
+        "回線が復帰すると自動で送信されます（手動の再送操作は必要ありません）。</span>"
+        " <a href='/deliveries'>配信キューを見る</a></div>"
     )
 
 
 _PAGE_STYLE = """
 <style>
+  /* ==== デザイントークン（docs/design_handoff_moegi_ui/moegi-tokens.css v1.2 が正） ====
+     文字色に使う組み合わせはすべて WCAG AA (4.5:1) 実測済み。値を変更しないこと。 */
   :root {
-    --ink: #1c1f1a;
-    --ink-soft: #565f4f;
-    --paper: #fbfaf5;
-    --paper-raised: #ffffff;
-    --line: #dde0d2;
-    --moegi: #7a9c2e;
-    --moegi-soft: #eef3e1;
-    --moegi-deep: #55701f;
-    --warn: #a8641b;
-    --warn-soft: #fbf1e2;
-    --danger: #a8391f;
-    --status-approved: #3f7d3a;
-    --status-approved-bg: #eef6ea;
-    --status-rejected: #7a7f70;
-    --status-rejected-bg: #f1f1ec;
-    --status-edited: #3a5f8a;
-    --status-edited-bg: #eaf1f8;
+    --ink: #333A32;              /* 本文 11.1:1 on paper */
+    --ink-soft: #565F4F;         /* 補助テキスト 6.3:1 */
+    --paper: #FAF9F2;
+    --paper-raised: #FFFFFF;
+    --line: #DDE0D2;
+    --moegi: #007B43;            /* 主ボタン地（常磐緑） */
+    --moegi-ink: #FFFFFF;        /* 主ボタンの文字 5.4:1 */
+    --moegi-hover: #00693A;
+    --moegi-soft: #EEF3E1;
+    --moegi-deep: #00532F;
+    --moegi-accent: #AACF53;     /* 萌黄。装飾・タグ地・ハイライト専用。文字色に使わない */
+    --link: #007B43;
+    --link-hover: #00532F;
+    --focus: #007B43;
+    --warn: #8A5E00;
+    --warn-soft: #FBF1E2;
+    --warn-icon: #F8B500;        /* 山吹。アイコン・図形専用。文字不可 */
+    --danger: #C0242F;
+    --danger-soft: #FBEAEA;
+    --status-approved: #2E6E45;  --status-approved-bg: #EAF4EA;
+    --status-rejected: #5F6557;  --status-rejected-bg: #F1F1EC;
+    --status-edited:   #33587F;  --status-edited-bg:   #EAF1F8;
+    --gate-passed:  #2E6E45;  --gate-passed-bg:  #EAF4EA;
+    --gate-review:  #8A5E00;  --gate-review-bg:  #FBF1E2;
+    --gate-blocked: #C0242F;  --gate-blocked-bg: #FBEAEA;
+    --gate-blocked-fill: #A8391F; /* 停止バナーの塗り。ページ内唯一の赤塗り */
+    --gate-failed:  #C0242F;  --gate-failed-bg:  #FBEAEA;
+    --diff-add: #E3F2E9;  --diff-add-border: #2E8B6E;
+    --diff-del: #FBEAEA;  --diff-del-border: #D9333F;
+    --diff-mod: #FEF5E0;  --diff-mod-border: #A87400;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --ink: #eceee6; --ink-soft: #b4bba8; --paper: #191c15; --paper-raised: #22261c;
-      --line: #363c2c; --moegi: #9bc24e; --moegi-soft: #26301a; --moegi-deep: #b9de77;
-      --warn: #dba15a; --warn-soft: #2c2416; --danger: #d97f63;
-      --status-approved: #7fc17a; --status-approved-bg: #1c2a1a;
-      --status-rejected: #9aa08d; --status-rejected-bg: #24261e;
-      --status-edited: #7fabde; --status-edited-bg: #182535;
+      --ink: #E9ECE0; --ink-soft: #ADB69D;
+      --paper: #15180F; --paper-raised: #1E2216; --line: #3A4130;
+      --moegi: #A9CE58;            /* ダークでは萌黄が主ボタン地 */
+      --moegi-ink: #1C2114; --moegi-hover: #C0DC82;
+      --moegi-soft: #262C1B; --moegi-deep: #C4DE85; --moegi-accent: #AACF53;
+      --link: #C4DE85; --link-hover: #E0EDBC; --focus: #A9CE58;
+      --warn: #E5B45B; --warn-soft: #2E2716; --warn-icon: #F8B500;
+      --danger: #E98973; --danger-soft: #33201B;
+      --status-approved: #9CCB8B;  --status-approved-bg: #22311F;
+      --status-rejected: #A9AFA0;  --status-rejected-bg: #2A2D24;
+      --status-edited:   #8FB4DE;  --status-edited-bg:   #1F2A38;
+      --gate-passed:  #9CCB8B;  --gate-passed-bg:  #22311F;
+      --gate-review:  #E5B45B;  --gate-review-bg:  #2E2716;
+      --gate-blocked: #E98973;  --gate-blocked-bg: #33201B;
+      --gate-blocked-fill: #A8391F;
+      --gate-failed:  #E98973;  --gate-failed-bg:  #33201B;
+      --diff-add: #172A24;  --diff-add-border: #57B08D;
+      --diff-del: #2E1A1D;  --diff-del-border: #D96A6A;
+      --diff-mod: #2B2413;  --diff-mod-border: #D9A03E;
     }
   }
+
+  /* ==== ベース ==== */
   * { box-sizing: border-box; }
   body {
+    margin: 0; background: var(--paper); color: var(--ink);
     font-family: -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
-    max-width: 880px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem;
-    background: var(--paper); color: var(--ink); line-height: 1.7;
+    font-size: 15px; line-height: 1.75;
   }
-  h1 { font-size: 1.5rem; letter-spacing: 0.01em; margin: 1.75rem 0 0.75rem; text-wrap: balance; }
-  h2 { font-size: 1.05rem; color: var(--ink-soft); font-weight: 600; margin: 2rem 0 0.75rem; }
-  a { color: var(--moegi-deep); }
+  main { max-width: 880px; margin: 0 auto; padding: 20px 20px 72px; }
+  a { color: var(--link); text-underline-offset: 3px; }
+  a:hover { color: var(--link-hover); }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+  h1 { font-size: 24px; line-height: 1.4; margin: 28px 0 4px; overflow-wrap: anywhere; }
+  h2 { font-size: 18px; margin: 32px 0 12px; }
+  h3 { font-size: 15px; margin: 20px 0 8px; }
+  .run-sub { color: var(--ink-soft); font-size: 13px; margin: 0 0 24px; }
+  .home-nav { font-size: 14px; padding-top: 4px; }
 
-  .home-nav { margin: 0.75rem 0 0; font-size: 0.85rem; }
-  .home-nav a { text-decoration: none; font-weight: 600; }
-  .home-nav a:hover { text-decoration: underline; }
-
-  .run-warning {
-    background: var(--warn-soft); border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0;
-    padding: 0.6rem 0.9rem; font-size: 0.85rem; color: var(--ink);
+  /* 配信キューのバッジ（G8・全ページ共通。pending 0件では出さない） */
+  .queue-note {
+    display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+    background: var(--warn-soft); border-left: 4px solid var(--warn-icon);
+    border-radius: 0 8px 8px 0; padding: 10px 16px; margin-top: 16px; font-size: 14px;
   }
-  .run-form { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.75rem; flex-wrap: wrap; }
-  select { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--paper-raised); color: var(--ink); }
 
-  .procedure-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0 1.25rem; }
-  .procedure-pill {
-    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 0.9rem;
-    border: 1px solid var(--line); border-radius: 99px; background: var(--paper-raised);
-    font-size: 0.88rem; cursor: pointer; user-select: none; min-height: 44px;
-  }
-  .procedure-pill:has(input:checked) { background: var(--moegi-soft); border-color: var(--moegi); color: var(--moegi-deep); font-weight: 600; }
-  .procedure-pill input { accent-color: var(--moegi-deep); width: 1.1rem; height: 1.1rem; }
-  .record-controls { display: flex; align-items: center; gap: 0.75rem; margin: 0.5rem 0 1.25rem; }
-  #record-btn { min-height: 48px; padding: 0.6rem 1.3rem; font-size: 1rem; }
-  #nippou-form > label { display: block; font-weight: 600; margin: 1rem 0 0.3rem; }
-
-  button {
-    cursor: pointer; font: inherit; font-weight: 600; border: none; border-radius: 6px;
-    padding: 0.45rem 1rem; background: var(--moegi); color: #10240a;
-  }
-  button:hover { background: var(--moegi-deep); color: #fff; }
-  button:disabled { opacity: 0.55; cursor: wait; }
-  .actions button { background: var(--paper-raised); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
-  .actions button:hover { background: var(--moegi-soft); color: var(--ink); }
-
-  .run-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
-  .run-list a { font-variant-numeric: tabular-nums; font-size: 0.9rem; }
-
+  /* ==== 更新案カード（②） ==== */
   .proposal {
-    border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 8px;
-    padding: 1rem 1.1rem; margin: 1rem 0; background: var(--paper-raised);
+    background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px;
+    padding: 24px; margin: 0 0 20px; position: relative;
   }
-  .proposal[data-status="承認"] { border-left-color: var(--status-approved); }
-  .proposal[data-status="却下"] { border-left-color: var(--status-rejected); opacity: 0.65; }
-  .proposal[data-status="編集済"] { border-left-color: var(--status-edited); }
+  .proposal[data-status="approved"] { border-left: 4px solid var(--status-approved); }
+  .proposal[data-status="edited"]   { border-left: 4px solid var(--status-edited); }
+  .proposal[data-status="rejected"] { border-left: 4px solid var(--line); }
+  .proposal[data-status="rejected"] > :not(.chips):not(.meta) { opacity: .55; }
+  .meta { font-size: 13px; color: var(--ink-soft); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .meta strong { color: var(--ink); font-weight: 600; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 14px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 700; line-height: 1.5;
+    border-radius: 999px; padding: 2px 12px;
+    background: var(--moegi-soft); color: var(--moegi-deep);
+  }
+  .chip-need     { background: var(--moegi-soft); color: var(--moegi-deep); }
+  .chip-unknown  { background: var(--warn-soft); color: var(--warn); }
+  .chip-pending  { background: var(--paper); color: var(--ink-soft); border: 1px solid var(--line); }
+  .chip-approved { background: var(--status-approved-bg); color: var(--status-approved); }
+  .chip-rejected { background: var(--status-rejected-bg); color: var(--status-rejected); }
+  .chip-edited   { background: var(--status-edited-bg); color: var(--status-edited); }
+  .status-chip   { background: var(--status-rejected-bg); color: var(--status-rejected); } /* 互換（⑤⑧⑨が移行するまで） */
+  /* 変更種別（通達Diffトークン。色だけに頼らず記号を併記） */
+  .kind {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 700; border-radius: 4px; padding: 1px 8px;
+    background: var(--diff-mod); border: 1px solid var(--diff-mod-border); color: var(--ink);
+  }
+  .kind-add { background: var(--diff-add); border-color: var(--diff-add-border); }
+  .confidence { font-size: 12px; color: var(--ink-soft); }
+  .rationale { margin: 0 0 16px; }
 
-  .meta { color: var(--ink-soft); font-size: 0.82rem; margin: 0 0 0.4rem; }
-  .chips { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.5rem; flex-wrap: wrap; }
-  .chip { display: inline-flex; align-items: center; padding: 0.15rem 0.55rem; border-radius: 99px; font-size: 0.78rem; font-weight: 600; background: var(--moegi-soft); color: var(--moegi-deep); }
-  .status-chip { background: var(--status-rejected-bg); color: var(--status-rejected); }
-  .proposal[data-status="承認"] .status-chip { background: var(--status-approved-bg); color: var(--status-approved); }
-  .proposal[data-status="編集済"] .status-chip { background: var(--status-edited-bg); color: var(--status-edited); }
-  .confidence { color: var(--ink-soft); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
-
-  .rationale { font-size: 0.92rem; color: var(--ink-soft); margin: 0.5rem 0; }
-  .diff { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 0.6rem 0; }
-  .diff > div { background: var(--paper); border: 1px solid var(--line); padding: 0.6rem 0.7rem; border-radius: 6px; font-size: 0.88rem; }
-  .diff .field-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); margin-bottom: 0.25rem; }
+  /* ==== Before / After ==== */
+  .diff { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .diff > div { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-size: 14px; }
   .diff .before { color: var(--ink-soft); }
-  .diff .after { font-weight: 600; }
-  mark { background: #f4e08a; color: #1c1f1a; border-radius: 2px; padding: 0 0.1em; }
-
-  details { margin: 0.6rem 0; }
-  summary { cursor: pointer; font-size: 0.85rem; color: var(--moegi-deep); font-weight: 600; }
-  .trace-text { white-space: pre-wrap; background: var(--paper); border: 1px solid var(--line); padding: 0.6rem 0.7rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.3rem; }
-
-  .actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; }
-  .edit-form { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.9rem; }
-  .edit-form .field-label { margin: 0; }
-  .edit-form button { align-self: flex-start; }
-  textarea {
-    width: 100%; font: inherit; font-size: 0.9rem; line-height: 1.5; padding: 0.6rem 0.7rem;
-    border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); resize: vertical;
+  .diff .after  { background: var(--diff-mod); border-color: var(--diff-mod-border); font-weight: 600; color: var(--ink); }
+  .field-label {
+    display: block; font-size: 11px; font-weight: 700; letter-spacing: .08em;
+    color: var(--ink-soft); margin-bottom: 6px;
   }
+  .diff .after .field-label { color: var(--ink); opacity: .7; }
+
+  /* ==== 原文トレース ==== */
+  .trace { margin-bottom: 16px; }
+  .trace summary {
+    cursor: pointer; color: var(--link); font-size: 14px; font-weight: 600;
+    min-height: 44px; display: flex; align-items: center; width: fit-content; padding-right: 8px;
+  }
+  .trace summary:hover { color: var(--link-hover); }
+  .trace-text {
+    background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; font-size: 13px; color: var(--ink-soft); margin-top: 4px;
+    white-space: pre-wrap;
+  }
+  mark {
+    background: var(--moegi-soft); color: var(--ink);
+    border-bottom: 2px solid var(--moegi-accent); padding: 0 2px;
+  }
+
+  /* ==== 操作 ==== */
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  button {
+    font: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
+    min-height: 44px; padding: 0 22px; border-radius: 8px;
+    border: 1.5px solid transparent;
+    background: var(--moegi); color: var(--moegi-ink); /* 既定=主ボタン（クラス未指定の旧画面互換） */
+  }
+  button:hover { background: var(--moegi-hover); color: var(--moegi-ink); }
+  button:active { background: var(--moegi-deep); color: var(--moegi-ink); }
+  .btn-secondary { background: transparent; color: var(--link); border-color: var(--moegi); }
+  .btn-secondary:hover { background: var(--moegi-soft); color: var(--link); }
+  button:disabled { background: var(--line); color: var(--ink-soft); cursor: not-allowed; border-color: transparent; }
+  .edit-form .field-label { font-size: 13px; letter-spacing: 0; color: var(--ink); }
+  .confirmed-text {
+    background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; font-size: 14px; margin: 0;
+  }
+  .confirmed-note { font-size: 13px; color: var(--ink-soft); margin: 6px 0 0; }
+  textarea {
+    width: 100%; font: inherit; font-size: 14px; line-height: 1.7;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+    min-height: 96px; resize: vertical;
+  }
+  textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; border-color: var(--focus); }
+  .edit-form button { margin-top: 10px; }
+
+  /* ==== ページ下部（②配信・出力） ==== */
+  .run-footer { border-top: 1px solid var(--line); margin-top: 36px; padding-top: 24px; }
+  .run-footer h2 { font-size: 18px; margin: 0 0 12px; }
+  .delivery-list { list-style: none; margin: 16px 0 0; padding: 0; font-size: 14px; }
+  .delivery-list li {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
+    padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--ink-soft);
+  }
+
+  /* ==== 互換（①③〜⑨の移行が済むまで残す旧コンポーネント） ==== */
+  .run-warning {
+    background: var(--warn-soft); border-left: 4px solid var(--warn-icon);
+    border-radius: 0 8px 8px 0; padding: 10px 16px; font-size: 14px; color: var(--ink);
+    margin: 12px 0;
+  }
+  .run-form { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  select, input[type="date"], input[type="month"] {
+    font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--paper-raised); color: var(--ink); min-height: 44px;
+  }
+  .procedure-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 20px; }
+  .procedure-pill {
+    display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px;
+    border: 1px solid var(--line); border-radius: 999px; background: var(--paper-raised);
+    font-size: 14px; cursor: pointer; user-select: none; min-height: 44px;
+  }
+  .procedure-pill:has(input:checked) {
+    background: var(--moegi-soft); border-color: var(--moegi); color: var(--moegi-deep); font-weight: 600;
+  }
+  .procedure-pill input { accent-color: var(--moegi); width: 18px; height: 18px; }
+  .record-controls { display: flex; align-items: center; gap: 12px; margin: 8px 0 20px; }
+  #record-btn { min-height: 48px; padding: 0 22px; font-size: 16px; }
+  #nippou-form > label { display: block; font-weight: 600; margin: 16px 0 4px; }
+  .run-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .run-list a { font-variant-numeric: tabular-nums; font-size: 14px; }
 
   @media (max-width: 600px) {
+    body { font-size: 16px; }
+    main { padding: 16px 16px 64px; }
+    .proposal { padding: 18px 16px; }
     .diff { grid-template-columns: 1fr; }
+    .actions button { flex: 1 1 40%; }
   }
 </style>
 """
@@ -275,8 +377,9 @@ def _render_page(body: str) -> HTMLResponse:
     return HTMLResponse(
         f"<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<meta name='color-scheme' content='light dark'>"
         f"<title>MOEGI 承認UI</title>{_PAGE_STYLE}</head>"
-        f"<body>{nav}{body}</body></html>"
+        f"<body><main>{nav}{body}</main></body></html>"
     )
 
 
@@ -406,19 +509,42 @@ def _trace_html(row: dict) -> str:
         new_text = new_text.replace(escaped_quote, f"<mark>{escaped_quote}</mark>")
 
     if row["old_text"] is not None:
-        old_block = f"<div><span class='field-label'>旧版（{html.escape(row['old_path'] or '')}）</span><div class='trace-text'>{html.escape(row['old_text'])}</div></div>"
+        old_block = (
+            f"<div class='trace-text'><span class='field-label'>旧版（{html.escape(row['old_path'] or '')}）</span>"
+            f"{html.escape(row['old_text'])}</div>"
+        )
     else:
-        old_block = "<div><span class='field-label'>旧版</span><div class='trace-text'>（完全新設。旧版に対応条文なし）</div></div>"
+        old_block = (
+            "<div class='trace-text'><span class='field-label'>旧版</span>"
+            "（完全新設。旧版に対応条文なし）</div>"
+        )
 
     return f"""
-    <details>
-      <summary>原文トレース（条文: {html.escape(row['new_path'])}）</summary>
-      <div class="diff">
-        {old_block}
-        <div><span class="field-label">新版（{html.escape(row['new_path'])}）</span><div class="trace-text">{new_text}</div></div>
-      </div>
+    <details class="trace">
+      <summary>▸ 原文トレース（条文: {html.escape(row['new_path'])}）</summary>
+      {old_block}
+      <div class="trace-text"><span class="field-label">新版（{html.escape(row['new_path'])}）</span>{new_text}</div>
     </details>
     """
+
+
+#: 提案ステータス（日本語・DB上の値）→ デザインの data-status / チップクラス
+#: （docs/design_handoff_moegi_ui/02-approval.html。CSSセレクタは英語の値で書かれている）
+_PROPOSAL_STATUS_ATTRS = {
+    "未承認": ("pending", "chip-pending"),
+    "承認": ("approved", "chip-approved"),
+    "却下": ("rejected", "chip-rejected"),
+    "編集済": ("edited", "chip-edited"),
+}
+
+_VERDICT_CHIP_CLASSES = {"要更新": "chip-need", "判定不能": "chip-unknown"}
+
+
+def _kind_chip_html(kind: str) -> str:
+    """変更種別チップ。色だけに頼らず「変」「＋」の記号を併記する（色覚多様性対応）。"""
+    if kind == "追加":
+        return "<span class='kind kind-add'>＋ 追加</span>"
+    return f"<span class='kind'>変　{html.escape(kind)}</span>"
 
 
 def _proposal_html(row: dict) -> str:
@@ -427,31 +553,56 @@ def _proposal_html(row: dict) -> str:
     after = html.escape(row["after"])
     row_id = row["row_id"]
     status = row["status"]
+    data_status, status_chip = _PROPOSAL_STATUS_ATTRS.get(status, ("pending", "chip-pending"))
+    verdict_chip = _VERDICT_CHIP_CLASSES.get(row["verdict"], "chip-pending")
 
-    return f"""
-    <div class="proposal" data-status="{html.escape(status)}">
-      <div class="meta">変更 {html.escape(row['change_label'])}（{html.escape(row['change_kind'])}） ・ 対象項目 {html.escape(item_label)}</div>
-      <div class="chips">
-        <span class="chip">{html.escape(row['verdict'])}</span>
-        <span class="chip status-chip">{html.escape(status)}</span>
-        <span class="confidence">信頼度 {row['confidence']:.2f}</span>
-      </div>
-      <p class="rationale">{html.escape(row['rationale'])}</p>
-      <div class="diff">
-        <div class="before"><span class="field-label">Before</span>{before}</div>
-        <div class="after"><span class="field-label">After</span>{after}</div>
-      </div>
-      {_trace_html(row)}
+    # 操作ボタン: 現在のステータスに該当する操作は「◯◯済み」の押せないボタンにする。
+    # 承認済み・却下カードは編集フォームを出さない（handoff §②: 編集するなら却下して差し戻す）。
+    if status == "承認":
+        actions = f"""
       <div class="actions">
-        <form method="post" action="/proposals/{row_id}/approve"><button type="submit">承認</button></form>
-        <form method="post" action="/proposals/{row_id}/reject"><button type="submit">却下</button></form>
+        <button type="button" class="btn-secondary" disabled>承認済み</button>
+        <form method="post" action="/proposals/{row_id}/reject"><button type="submit" class="btn-secondary">却下</button></form>
+      </div>
+      <div class="edit-form">
+        <span class="field-label">確定した文言</span>
+        <p class="confirmed-text">{after}</p>
+        <p class="confirmed-note">承認済みのため編集できません（編集する場合は却下して差し戻してください）。</p>
+      </div>"""
+    elif status == "却下":
+        actions = f"""
+      <div class="actions">
+        <form method="post" action="/proposals/{row_id}/approve"><button type="submit" class="btn-secondary">承認</button></form>
+        <button type="button" class="btn-secondary" disabled>却下済み</button>
+      </div>"""
+    else:  # 未承認・編集済
+        actions = f"""
+      <div class="actions">
+        <form method="post" action="/proposals/{row_id}/approve"><button type="submit" class="btn-primary">承認</button></form>
+        <form method="post" action="/proposals/{row_id}/reject"><button type="submit" class="btn-secondary">却下</button></form>
       </div>
       <form class="edit-form" method="post" action="/proposals/{row_id}/edit">
         <label class="field-label" for="after-{row_id}">文言を編集</label>
         <textarea id="after-{row_id}" name="after" rows="4">{after}</textarea>
-        <button type="submit">編集して保存</button>
-      </form>
-    </div>
+        <button type="submit" class="btn-primary">編集して保存</button>
+      </form>"""
+
+    return f"""
+    <article class="proposal" data-status="{data_status}">
+      <p class="meta">{_kind_chip_html(row['change_kind'])} ・ 対象項目 <strong>{html.escape(item_label)}</strong></p>
+      <div class="chips">
+        <span class="chip {verdict_chip}">{html.escape(row['verdict'])}</span>
+        <span class="chip {status_chip}">{html.escape(status)}</span>
+        <span class="confidence">信頼度 {row['confidence']:.2f}</span>
+      </div>
+      <p class="rationale">{html.escape(row['rationale'])}</p>
+      <div class="diff">
+        <div class="before"><span class="field-label">BEFORE</span>{before}</div>
+        <div class="after"><span class="field-label">AFTER</span>{after}</div>
+      </div>
+      {_trace_html(row)}
+      {actions}
+    </article>
     """
 
 
@@ -460,37 +611,55 @@ def review_run(run_id: str) -> HTMLResponse:
     conn = _db_conn()
     try:
         rows = store.list_proposals_for_review(conn, run_id)
-        deliveries = store.list_fax_deliveries(conn, run_id)
+        fax_history = store.list_fax_deliveries(conn, run_id)
+        queue_items = [d for d in store.list_deliveries(conn) if d["run_id"] == run_id]
     finally:
         conn.close()
 
     if not rows:
-        return _render_page(f"<h1>run_id={html.escape(run_id)}</h1><p>更新案がありません。</p>")
-
-    approved_count = sum(1 for r in rows if r["status"] == "承認")
-    history_html = (
-        "<p class='meta'>配信履歴はまだありません。</p>"
-        if not deliveries
-        else "<ul class='run-list'>"
-        + "".join(
-            f"<li>{html.escape(d['generated_at'])} — 更新案 {len(d['proposal_row_ids'])} 件</li>"
-            for d in deliveries
+        return _render_page(
+            f"<h1>更新案の承認</h1><p class='run-sub'>run_id {html.escape(run_id)}</p>"
+            "<p>更新案がありません。</p>"
         )
-        + "</ul>"
+
+    # handoff §②: FAX生成と配信履歴（FAX・メールキュー）を1つのフッターにまとめる
+    history_items = "".join(
+        f"<li><span>{html.escape(d['generated_at'])}</span>"
+        f"<span>FAX様式PDF ・ 更新案 {len(d['proposal_row_ids'])} 件</span>"
+        f"<span class='chip chip-approved'>生成済み</span></li>"
+        for d in fax_history
+    ) + "".join(
+        f"<li><span>{html.escape(d['created_at'])}</span>"
+        f"<span>宛先 {html.escape(d['recipient'])} ・ チャネル {html.escape(d['channel'])}</span>"
+        f"<span class='chip {'chip-approved' if d['status'] == 'sent' else 'chip-pending'}'>"
+        f"{'送信済み' if d['status'] == 'sent' else '送信待ち'}</span></li>"
+        for d in queue_items
     )
-    fax_section = f"""
-    <h2>配布（即時チャネル）</h2>
-    <p class="meta">承認済み {approved_count} 件を反映したFAX様式PDFのプレビューを生成します（design.md §5.3）。</p>
-    <form method="get" action="/runs/{html.escape(run_id)}/fax-preview">
-      <button type="submit">FAXプレビューPDFを生成</button>
-    </form>
-    <h2>配信履歴</h2>
-    {history_html}
+    history_html = (
+        f"<ul class='delivery-list'>{history_items}</ul>"
+        if history_items
+        else "<p class='meta'>配信履歴はまだありません。</p>"
+    )
+    footer = f"""
+    <footer class="run-footer">
+      <h2>配信・出力</h2>
+      <div class="actions">
+        <form method="get" action="/runs/{html.escape(run_id)}/fax-preview">
+          <button type="submit" class="btn-secondary">FAXプレビューPDFを生成</button>
+        </form>
+      </div>
+      {history_html}
+    </footer>
     """
 
-    body = f"<h1>更新案の承認（run_id={html.escape(run_id)}）</h1>"
+    first = rows[0]
+    body = (
+        "<h1>更新案の承認</h1>"
+        f"<p class='run-sub'>run_id {html.escape(run_id)} ・ "
+        f"対象条文 {html.escape(first['change_label'])}（{html.escape(first['change_kind'])}）</p>"
+    )
     body += "".join(_proposal_html(row) for row in rows)
-    body += fax_section
+    body += footer
     return _render_page(body)
 
 
