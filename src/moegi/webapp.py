@@ -24,6 +24,7 @@ import secrets
 import tempfile
 from contextlib import asynccontextmanager, suppress
 from datetime import date
+from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -32,12 +33,27 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from moegi import checklist, delivery, fax, ingest, llm, monthly, nippou, pipeline, privacy, store, webstyle
+from moegi import (
+    checklist,
+    delivery,
+    demo,
+    fax,
+    ingest,
+    llm,
+    monthly,
+    nippou,
+    paths,
+    pipeline,
+    privacy,
+    store,
+    webstyle,
+)
+from moegi.webviews import _monthly_report_html, _nippou_record_html, _soap_record_html, _vital_chart_svg  # noqa: F401
 from moegi.privacy import dictionary as privacy_dictionary
 from moegi.privacy import vault as privacy_vault
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_FAX_OUTPUT_DIR = _REPO_ROOT / "data" / "fax_previews"
+_FAX_OUTPUT_DIR = paths.data_dir() / "fax_previews"
 
 # design/moegi/privacy.md §10: uvicorn・httpx を含む logging 経由の出力に
 # サニタイザーを差し込む。アプリの起動より前（モジュール読み込み時）に行う。
@@ -95,11 +111,27 @@ def _validated_subject_code(code: str) -> str:
 
 
 def _normalize_visited_on(raw: str) -> str:
-    """訪問日を YYYY-MM-DD に正規化する。空・不正なら当日を使う。"""
-    try:
-        return date.fromisoformat(raw.strip()).isoformat()
-    except (ValueError, AttributeError):
+    """訪問日を YYYY-MM-DD に正規化する。空なら当日。不正な値は黙って直さずエラーにする
+    （別の日の記録として保存され、月報が静かに狂うのを防ぐ）。"""
+    raw = (raw or "").strip()
+    if not raw:
         return date.today().isoformat()
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail="訪問日の形式が正しくありません。日付を選び直してください。"
+        ) from None
+
+
+def _validated_procedures(values: list[str]) -> list[str]:
+    """処置内容は画面の選択肢だけを受け付ける（任意の文字列を日報として保存しない）。"""
+    unknown = [v for v in values if v not in _PROCEDURE_OPTIONS]
+    if unknown:
+        raise HTTPException(
+            status_code=422, detail="処置内容の選択が正しくありません。日報の入力画面からやり直してください。"
+        )
+    return list(dict.fromkeys(values))
 
 # ledger R-77・R-80: 処置内容はLLMの自由記述抽出に任せず、ボタン選択式（複数選択可）にする
 # （処置名の表記揺れ・誤認識リスクを避けるため）。design.md §6.5「処置入力のボタン選択UI
@@ -179,11 +211,16 @@ async def _lifespan(_: FastAPI):
             await task
 
 
-app = FastAPI(title="MOEGI 承認UI", lifespan=_lifespan)
+app = FastAPI(title="MOEGI", lifespan=_lifespan)
 
 
 def _db_conn():
     return store.connect()
+
+
+def _new_adapter():
+    """AIへの窓口。デモモードでは、AIを呼ばない簡易版を返す（demo.py）。"""
+    return demo.DemoAdapter() if demo.is_demo() else llm.LLMAdapter()
 
 
 def _pending_delivery_badge() -> str:
@@ -207,12 +244,17 @@ _PAGE_STYLE = webstyle.PAGE_STYLE
 
 def _render_page(body: str, status_code: int = 200) -> HTMLResponse:
     nav = "<nav class='home-nav'><a href='/'>← MOEGI ホーム</a></nav>"
-    body = _pending_delivery_badge() + body
+    demo_banner = (
+        f"<div class='run-warning' role='note'>🧪 <span>{html.escape(demo.DEMO_BANNER)}</span></div>"
+        if demo.is_demo()
+        else ""
+    )
+    body = demo_banner + _pending_delivery_badge() + body
     return HTMLResponse(
         f"<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
         f"<meta name='color-scheme' content='light dark'>"
-        f"<title>MOEGI 承認UI</title>{_PAGE_STYLE}</head>"
+        f"<title>MOEGI（もえぎ）</title>{_PAGE_STYLE}</head>"
         f"<body><main>{nav}{body}</main></body></html>",
         status_code=status_code,
     )
@@ -263,7 +305,12 @@ async def _access_guard(request: Request, call_next):
 @app.exception_handler(StarletteHTTPException)
 async def _http_error_page(request: Request, exc: StarletteHTTPException) -> HTMLResponse:
     """英語の生エラーを出さず、原因と次の行動を日本語で示す。"""
-    if exc.status_code == 404:
+    custom = ""
+    if isinstance(exc.detail, str) and exc.detail != HTTPStatus(exc.status_code).phrase:
+        custom = exc.detail  # このアプリが日本語で書いた案内（標準の英語の文言ではないもの）
+    if custom:
+        message = custom
+    elif exc.status_code == 404:
         message = (
             "指定されたページまたはデータが見つかりません。"
             "ホームに戻って、一覧から開き直してください。"
@@ -272,11 +319,29 @@ async def _http_error_page(request: Request, exc: StarletteHTTPException) -> HTM
         message = "ファイルが大きすぎます。短い音声に分けるか、文字で入力してください。"
     elif exc.status_code == 422:
         message = "入力内容に不足または誤りがあります。前の画面に戻って入力し直してください。"
+    elif exc.status_code == 405:
+        message = (
+            "このアドレスは、画面のボタンからの操作でだけ使えます（アドレスを直接開いても実行できません）。"
+            "ホームから操作をやり直してください。"
+        )
     else:
         message = str(exc.detail) if isinstance(exc.detail, str) and exc.detail else "処理できませんでした。"
     return _render_page(
         f"<h1>処理できませんでした</h1><div class='run-warning'>⚠️ <span>{html.escape(message)}</span></div>",
         status_code=exc.status_code,
+    )
+
+
+@app.exception_handler(Exception)
+async def _unexpected_error_page(request: Request, exc: Exception) -> HTMLResponse:
+    """想定外の失敗。英語の「Internal Server Error」ではなく、次の行動を日本語で示す。
+    例外の中身（入力や個人情報が混ざり得る）は画面にもログにも出さない。"""
+    return _render_page(
+        "<h1>処理できませんでした</h1><div class='run-warning'>⚠️ <span>"
+        "予期しないエラーが起きました。入力した内容は保存されていない可能性があります。"
+        "ホームに戻って、もう一度操作してください。繰り返す場合は管理者に連絡してください。</span></div>"
+        "<p class='back-link'><a href='/'>← ホームに戻る</a></p>",
+        status_code=500,
     )
 
 
@@ -318,7 +383,7 @@ def index() -> HTMLResponse:
 
     targets = ingest.load_allowlist(str(pipeline._REPO_ROOT / "config" / "allowlist.toml"))
     label_options = "".join(
-        f"<option value='{html.escape(t['label'])}'>{html.escape(t['label'])} — {html.escape(t['title'])}</option>"
+        f"<option value='{html.escape(t['label'])}'>{html.escape(t['title'])}（対象条文 {html.escape(t['label'])}）</option>"
         for t in targets
     )
 
@@ -335,7 +400,8 @@ def index() -> HTMLResponse:
             items.append(
                 f"<li><span class='run-when'>{when}</span>"
                 f"<span class='run-target'>対象条文 {html.escape(label)}（{html.escape(kind)}）</span>"
-                f"{chip}<a href='/runs/{html.escape(run_id)}'>{link_text}</a></li>"
+                f"{chip}<a href='/runs/{html.escape(run_id)}'>{link_text}</a>"
+                f"<a href='/runs/{html.escape(run_id)}/before-after'>改定前後を比較 →</a></li>"
             )
         run_list = "<ul class='run-list'>" + "".join(items) + "</ul>"
     else:
@@ -345,6 +411,18 @@ def index() -> HTMLResponse:
           <p><strong>まだ分析結果がありません</strong></p>
           <p>上のフォームから対象条文を選んで、最初の分析を実行してください。</p>
         </div>"""
+
+    if demo.is_demo():
+        run_hint = (
+            "デモモードでは、通達は読み込まず、合成した更新案2件を入れます（数秒で終わります）。"
+            "承認・却下・編集、配信キュー、FAXプレビュー、改定前後の比較を試せます。"
+        )
+    else:
+        run_hint = (
+            "改定条文と現行チェックリストを突き合わせ、更新案を生成します。所要時間の目安は1分前後です"
+            "（開発時に、クラウドAIを使えた状態で手元の環境で計測した値で、PCや回線によって変わります）。"
+            "クラウドAIに接続できない場合は、ローカルAIだけで処理するため数分かかることがあります。"
+        )
 
     body = f"""
     <h1 class="brand"><span class="brand-mark">萌</span>MOEGI</h1>
@@ -360,9 +438,9 @@ def index() -> HTMLResponse:
         <button type="submit" class="btn-primary">分析を実行</button>
         <div class="progress-state" role="status">
           <span class="spinner"></span>
-          <span>更新案を生成中… <small>1分ほどかかる場合があります。画面を閉じないでください。</small></span>
+          <span>更新案を生成中… <small>1分前後から数分かかる場合があります。画面を閉じないでください。</small></span>
         </div>
-        <p class="run-hint">改定条文と現行チェックリストを突き合わせ、更新案を生成します（約47秒。クラウド呼び出しが失敗した場合のみローカルへ自動フォールバックし、その場合は数分かかります）。</p>
+        <p class="run-hint">{run_hint}</p>
       </form>
     </section>
 
@@ -412,6 +490,13 @@ def create_run(label: str = Form(...)) -> RedirectResponse | HTMLResponse:
     入力する通達PDFは、このリポジトリのコードに固定された新旧1組だけ（アップロードは未実装）。
     PDFが無い・AIに接続できない場合は、保存せずに日本語で原因と次の行動を示す。
     """
+    if demo.is_demo():
+        conn = _db_conn()
+        try:
+            demo_run_id = demo.seed_run(conn)
+        finally:
+            conn.close()
+        return RedirectResponse(url=f"/runs/{demo_run_id}", status_code=303)
     missing = _missing_notice_pdfs()
     if missing:
         return _error_page(
@@ -454,7 +539,7 @@ def create_run(label: str = Form(...)) -> RedirectResponse | HTMLResponse:
     conn = _db_conn()
     run_id = store.new_run_id()
     try:
-        with llm.LLMAdapter() as adapter:
+        with _new_adapter() as adapter:
             result = pipeline.run(
                 old_sections=old_sections,
                 new_sections=new_sections,
@@ -469,6 +554,17 @@ def create_run(label: str = Form(...)) -> RedirectResponse | HTMLResponse:
                 orchestrate=True,
             )
             unavailable = adapter.local_unavailable_count
+            timed_out = adapter.local_timeout_count
+            all_failed = bool(adapter.local_call_count) and (
+                unavailable + timed_out >= adapter.local_call_count
+            )
+        if all_failed and not unavailable:
+            return _error_page(
+                "ローカルAI（Ollama）が時間内に応答しませんでした",
+                "分析の途中でローカルAI（Ollama）が時間内に応答しなかったため、結果は保存していません。"
+                "PCの負荷が高いか、モデルが大きすぎる可能性があります。少し待ってから、もう一度「分析を実行」を押してください。",
+                503,
+            )
         if unavailable:
             # AIに接続できなかった回は「判定不能」だらけの結果になる。保存せず、やり直しを案内する。
             return _error_page(
@@ -482,7 +578,8 @@ def create_run(label: str = Form(...)) -> RedirectResponse | HTMLResponse:
     finally:
         conn.close()
 
-    return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+    suffix = "?notice=partial_timeout" if timed_out else ""
+    return RedirectResponse(url=f"/runs/{run_id}{suffix}", status_code=303)
 
 
 def _trace_html(row: dict) -> str:
@@ -563,9 +660,17 @@ def _proposal_html(row: dict) -> str:
         <button type="button" class="btn-secondary" disabled>却下済み</button>
       </div>"""
     else:  # 未承認・編集済
+        if status == "編集済":
+            # 編集して保存した時点で、その文言で承認済み。もう一度「承認」を押させない（通知の二重送信を防ぐ）。
+            approve_button = '<button type="button" class="btn-secondary" disabled>編集して承認済み</button>'
+        else:
+            approve_button = (
+                f'<form method="post" action="/proposals/{row_id}/approve">'
+                '<button type="submit" class="btn-primary">承認</button></form>'
+            )
         actions = f"""
       <div class="actions">
-        <form method="post" action="/proposals/{row_id}/approve"><button type="submit" class="btn-primary">承認</button></form>
+        {approve_button}
         <form method="post" action="/proposals/{row_id}/reject"><button type="submit" class="btn-secondary">却下</button></form>
       </div>
       <form class="edit-form" method="post" action="/proposals/{row_id}/edit">
@@ -593,12 +698,32 @@ def _proposal_html(row: dict) -> str:
     """
 
 
-_DELIVERY_STATUS_LABELS = {"sent": "送信済み", "pending": "送信待ち", "cancelled": "取り消し済み"}
+_DELIVERY_STATUS_LABELS = {
+    "sent": "送信済み",
+    "pending": "送信待ち",
+    "cancelled": "取り消し済み",
+    "failed": "送信失敗",
+}
 
 _RUN_NOTICES = {
     "delivery_refused": (
-        "承認は完了しましたが、本文に利用者などの識別子らしき文字列が含まれていたため、"
-        "メール等の配信は行っていません。文言を確認し、必要なら編集し直してください。"
+        "承認しましたが、本文に利用者などの識別子らしき文字列が含まれていたため、"
+        "メール等の配信は行っていません（FAX様式PDFと日報のチェックリストには反映されています）。"
+        "文言を確認し、識別子を取り除いて編集し直してください。"
+    ),
+    "approve_refused": (
+        "更新案の本文に、利用者などの識別子らしき文字列（氏名・電話番号・番号など）が含まれているため、"
+        "承認していません（FAX・メール・日報のチェックリストには反映されません）。"
+        "識別子を取り除いて「編集して承認」するか、却下してください。"
+    ),
+    "edit_refused": (
+        "編集した文言に、利用者などの識別子らしき文字列（氏名・電話番号・番号など）が含まれているため、"
+        "保存していません（変更は何も反映されていません）。識別子を取り除いてから、もう一度保存してください。"
+    ),
+    "already_approved": "この更新案はすでに承認済みです。通知は二重に積んでいません。",
+    "partial_timeout": (
+        "一部の判定がAIの時間切れで「判定不能」になっています。件数が多い場合は、"
+        "もう一度「分析を実行」してください。"
     ),
     "reject_cancelled": "却下しました。送信待ちだった通知は取り消しました。",
     "reject_after_sent": (
@@ -620,9 +745,10 @@ def review_run(run_id: str, notice: str = "") -> HTMLResponse:
         conn.close()
 
     if not rows:
-        return _render_page(
-            f"<h1>更新案の承認</h1><p class='run-sub'>run_id {html.escape(run_id)}</p>"
-            "<p>更新案がありません。</p>"
+        return _error_page(
+            "更新案が見つかりません",
+            "指定された分析結果（更新案）がありません。ホームの「過去の実行」から開き直してください。",
+            404,
         )
 
     # handoff §②: FAX生成と配信履歴（FAX・メールキュー）を1つのフッターにまとめる
@@ -646,9 +772,13 @@ def review_run(run_id: str, notice: str = "") -> HTMLResponse:
     footer = f"""
     <footer class="run-footer">
       <h2>配信・出力</h2>
+      <p class="meta">FAXは様式のPDFを作るところまでです。印刷・送信は人が行います。</p>
       <div class="actions">
         <form method="get" action="/runs/{html.escape(run_id)}/fax-preview">
           <button type="submit" class="btn-secondary">FAXプレビューPDFを生成</button>
+        </form>
+        <form method="get" action="/runs/{html.escape(run_id)}/before-after">
+          <button type="submit" class="btn-secondary">改定前後の記録を比較する（Before / After）</button>
         </form>
       </div>
       {history_html}
@@ -716,6 +846,16 @@ def _require_proposal(conn, proposal_row_id: int) -> None:
         raise HTTPException(status_code=404, detail="指定された更新案が見つかりません。")
 
 
+def _screen_identifiers(row: dict) -> list[str]:
+    """承認・配布する文言に識別子らしき文字列があれば、その種別を返す（空なら問題なし）。
+
+    承認・編集の保存の前に必ず通す。配信だけを止めて、FAX や日報のチェックリストには
+    載る、という食い違いを作らないため、検出されたら承認も保存もしない。
+    """
+    today = date.today()
+    return delivery.screen_notice([row], today=(today.year, today.month, today.day))
+
+
 def _enqueue_approved_notice(conn, proposal_row_id: int) -> bool:
     """承認された更新案を配信キューへ積む（design.md G8・ledger R-89）。
 
@@ -753,6 +893,11 @@ def approve_proposal(proposal_row_id: int) -> RedirectResponse:
     conn = _db_conn()
     try:
         _require_proposal(conn, proposal_row_id)
+        row = store.get_proposal_for_review(conn, proposal_row_id)
+        if row is not None and row["status"] in checklist.APPLIED_STATUSES:
+            return _redirect_to_run(conn, proposal_row_id, "already_approved")
+        if row is not None and _screen_identifiers(row):
+            return _redirect_to_run(conn, proposal_row_id, "approve_refused")
         store.update_proposal_status(conn, proposal_row_id, "承認")
         queued = _enqueue_approved_notice(conn, proposal_row_id)
         return _redirect_to_run(conn, proposal_row_id, "" if queued else "delivery_refused")
@@ -786,59 +931,15 @@ def edit_proposal(proposal_row_id: int, after: str = Form(...)) -> RedirectRespo
         after = after.strip()
         if not after:
             return _redirect_to_run(conn, proposal_row_id, "edit_empty")
+        current = store.get_proposal_for_review(conn, proposal_row_id)
+        if current is not None and _screen_identifiers({**current, "after": after}):
+            return _redirect_to_run(conn, proposal_row_id, "edit_refused")
         store.update_proposal_status(conn, proposal_row_id, "編集済", after=after)
         store.cancel_pending_deliveries_for_proposal(conn, proposal_row_id)
         queued = _enqueue_approved_notice(conn, proposal_row_id)
         return _redirect_to_run(conn, proposal_row_id, "" if queued else "delivery_refused")
     finally:
         conn.close()
-
-
-def _nippou_record_html(record: nippou.NippouRecord) -> str:
-    """日報の構造化結果（handoff §⑤: モバイル縦2段カード・600px以上で2カラムgrid）。"""
-    rows = []
-    if record.procedures:
-        procedures = "、".join(record.procedures)
-        rows.append(
-            "<div class='nippou-row'>"
-            "<span class='nippou-item'>処置内容（ボタン選択）</span>"
-            f"<span class='nippou-value'><span class='chip chip-filled'>✓ 記入済み</span>{html.escape(procedures)}</span></div>"
-        )
-    for item in record.items:
-        if item.filled:
-            rows.append(
-                "<div class='nippou-row'>"
-                f"<span class='nippou-item'>{html.escape(item.checklist_item_id)}</span>"
-                f"<span class='nippou-value'><span class='chip chip-filled'>✓ 記入済み</span>{html.escape(item.value)}</span></div>"
-            )
-        else:
-            rows.append(
-                "<div class='nippou-row empty'>"
-                f"<span class='nippou-item'>{html.escape(item.checklist_item_id)}</span>"
-                "<span class='nippou-value'><span class='chip chip-empty'>－ 未記入</span>発話から読み取れませんでした</span></div>"
-            )
-
-    evaluation_html = ""
-    if record.evaluation:
-        ev = record.evaluation
-        evaluation_html = f"""
-    <section>
-      <h2>評価</h2>
-      <div class="eval-list">
-        <div class="eval-row"><span class="eval-label">看護目標</span>{html.escape(ev.goal_ref or '（参照なし）')}</div>
-        <div class="eval-row"><span class="eval-label">達成度</span>{html.escape(ev.achievement)}</div>
-        <div class="eval-row"><span class="eval-label">効果</span>{html.escape(ev.effect or '（記載なし）')}</div>
-      </div>
-    </section>"""
-
-    return f"""
-    <section>
-      <h2>日報</h2>
-      <div class="nippou-table">{"".join(rows)}</div>
-      <p class="section-hint">未記入の項目は月報作成前に追記できます。</p>
-    </section>
-    {evaluation_html}
-    """
 
 
 @app.get("/nippou", response_class=HTMLResponse)
@@ -853,9 +954,10 @@ def nippou_form() -> HTMLResponse:
 
     <details class="run-warning">
       <summary>🖥 音声とテキストは、この端末とローカルサーバーの中で処理されます</summary>
-      <p class="warning-body">録音した音声・入力したテキストは事業所内のサーバーで文字起こし・構造化され、
-      外部のクラウドサービスには送信されません（gemma4:26b・ledger N-11）。電波が無い場所でも録音自体はでき、
-      あとで構造化できます。</p>
+      <p class="warning-body">録音した音声・入力したテキストは、このシステムを動かしているPC（または事業所内のサーバー）の
+      ローカルAIで文字起こし・構造化され、外部のクラウドサービスには送信されません。
+      録音はブラウザの中に一時的に置かれるだけで、保存されません。<strong>ページを閉じたり再読み込みしたりすると消える</strong>ので、
+      録音したらその場で「構造化する」まで進めてください。構造化にはサーバーとローカルAIへの接続が必要です。</p>
     </details>
     <details class="run-warning">
       <summary>🔎 保存の前に Privacy Gate の検査を通ります</summary>
@@ -978,39 +1080,25 @@ def nippou_form() -> HTMLResponse:
           recordBtnLabel.textContent = '録音を停止';
           statusEl.textContent = '録音中（タップで停止）';
         }}).catch(function(err) {{
-          statusEl.textContent = 'マイクを使用できませんでした: ' + err.message;
+          var name = err && err.name;
+          var msg = 'マイクを使えませんでした。';
+          if (name === 'NotAllowedError' || name === 'SecurityError') {{
+            msg += 'ブラウザでマイクの使用が許可されていません。許可するか、テキストで入力してください'
+              + '（localhost 以外の http の画面では、マイクは使えません）。';
+          }} else if (name === 'NotFoundError') {{
+            msg += 'マイクが見つかりません。接続を確かめるか、テキストで入力してください。';
+          }} else if (name === 'NotReadableError') {{
+            msg += '他のアプリがマイクを使っている可能性があります。テキストで入力することもできます。';
+          }} else {{
+            msg += 'テキストで入力してください。';
+          }}
+          statusEl.textContent = msg;
         }});
       }});
     }})();
     </script>
     """
     return _render_page(body)
-
-
-def _soap_record_html(record: nippou.SoapRecord) -> str:
-    if record.undecidable:
-        return (
-            "<section><h2>SOAP</h2>"
-            "<div class='run-warning'>⚠️ <span>ローカルLLMがSOAP構造化を完了できませんでした（判定不能）。"
-            "内容を確認して、もう一度お試しください。</span></div></section>"
-        )
-    rows = "".join(
-        f"<div class='soap-row'><span class='soap-key'>{key}</span>"
-        + (f"<p>{html.escape(value)}</p>" if value else "<p class='meta'>（該当する記載なし）</p>")
-        + "</div>"
-        for key, value in (
-            ("S", record.subjective),
-            ("O", record.objective),
-            ("A", record.assessment),
-            ("P", record.plan),
-        )
-    )
-    return f"""
-    <section>
-      <h2>SOAP</h2>
-      <div class="soap-list">{rows}</div>
-    </section>
-    """
 
 
 #: Privacy Gate の状態 → 表示クラス・アイコン・見出し（handoff §⑤⑥）。
@@ -1107,7 +1195,8 @@ def _gate_message(result: privacy.GateResult) -> str:
     if "empty_input" in codes:
         return "入力が空です。話した内容を文字で入力するか、音声ファイルを選んでから「構造化する」を押してください。"
     if codes & {"llm_unavailable", "llm_timeout", "llm_invalid_json"} and not (
-        codes & {"ambiguous_name", "residual_registered_name", "excessive_removal", "residual_risk_above_threshold"}
+        codes & {"ambiguous_name", "residual_registered_name", "excessive_removal"}
+        or any(c.startswith(("blocked_", "residual_")) and c != "residual_risk_above_threshold" for c in codes)
     ):
         return (
             "ローカルAI（Ollama）に接続できない、または応答が得られなかったため、補完検査を完了できませんでした。"
@@ -1218,10 +1307,13 @@ def _run_privacy_gate(text: str, *, adapter) -> privacy.GateResult:
     vault_conn = None
     try:
         vault_conn = privacy_vault.connect()
-    except Exception:  # noqa: BLE001 — 対応表DBを開けないこと自体は gate 側が fail-closed で扱う
+    except Exception:  # noqa: BLE001 — 開けないときは vault_conn=None のまま gate へ渡し、fail-closed にする
         vault_conn = None
     try:
-        return privacy.run_gate(text, config=PRIVACY_CONFIG, adapter=adapter, vault_conn=vault_conn)
+        # require_vault: 対応表を保存できないまま仮名化済みの文章を先へ進めない（fail-closed）
+        return privacy.run_gate(
+            text, config=PRIVACY_CONFIG, adapter=adapter, vault_conn=vault_conn, require_vault=True
+        )
     finally:
         if vault_conn is not None:
             vault_conn.close()
@@ -1271,17 +1363,34 @@ def _save_nippou_record(
     context: _RecordContext,
     record: nippou.NippouRecord,
     soap: nippou.SoapRecord | None,
-) -> bool:
+) -> str:
     """日報・SOAPの構造化結果を保存する（月報の集計材料・ledger R-84）。
 
     利用者コードが選ばれていない場合は保存しない——「誰の記録か分からない日報」を
     DBへ入れると月報の集計が静かに狂う。保存できなかったことは画面に出す。
+    戻り値: "saved"（保存した）／"duplicate"（同じ内容が既にあり保存しなかった）／""（保存しなかった）。
     """
     if not context.subject_code:
-        return False
+        return ""
     subject_pseudonym = privacy_vault.stable_pseudonym(context.subject_code)
     conn = _db_conn()
     try:
+        items = [dataclasses.asdict(i) for i in record.items]
+        evaluation = dataclasses.asdict(record.evaluation) if record.evaluation else None
+        soap_dict = dataclasses.asdict(soap) if soap is not None else None
+        if (
+            store.find_duplicate_nippou_record(
+                conn,
+                subject_pseudonym=subject_pseudonym,
+                visited_on=context.visited_on,
+                items=items,
+                procedures=list(record.procedures),
+                evaluation=evaluation,
+                soap=soap_dict,
+            )
+            is not None
+        ):
+            return "duplicate"
         store.save_nippou_record(
             conn,
             request_id=result.request_id,
@@ -1290,14 +1399,29 @@ def _save_nippou_record(
             gate_status=result.status.value,
             checklist_version=record.checklist_version,
             policy_version=result.policy_version,
-            items=[dataclasses.asdict(i) for i in record.items],
-            evaluation=dataclasses.asdict(record.evaluation) if record.evaluation else None,
+            items=items,
+            evaluation=evaluation,
             procedures=list(record.procedures),
-            soap=dataclasses.asdict(soap) if soap is not None else None,
+            soap=soap_dict,
         )
     finally:
         conn.close()
-    return True
+    return "saved"
+
+
+def _same_day_record_count(context: _RecordContext) -> int:
+    try:
+        conn = _db_conn()
+        try:
+            return store.count_nippou_records_on(
+                conn,
+                subject_pseudonym=privacy_vault.stable_pseudonym(context.subject_code),
+                visited_on=context.visited_on,
+            )
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — 件数の補足表示なので、失敗しても結果画面は出す
+        return 0
 
 
 def _current_sitedoc() -> tuple[pipeline.SiteDoc, int]:
@@ -1335,7 +1459,7 @@ def _structure_and_render(result: privacy.GateResult, context: _RecordContext) -
         return _render_page(body)
 
     sitedoc, applied_changes = _current_sitedoc()
-    adapter = llm.LLMAdapter()
+    adapter = _new_adapter()
     try:
         agent = nippou.NippouAgent(adapter)
         agent.set_checklist(sitedoc.items)
@@ -1369,12 +1493,26 @@ def _structure_and_render(result: privacy.GateResult, context: _RecordContext) -
     soap_failed = soap is not None and soap.undecidable
     saved = _save_nippou_record(result, context, record, None if soap_failed else soap)
 
-    if saved:
+    if saved == "duplicate":
+        saved_html = (
+            "<div class='save-note'>✓ 同じ利用者・同じ訪問日で、まったく同じ内容の記録が既に保存されているため、"
+            "二重には保存しませんでした（月報の回数は増えていません）。"
+            "<a href='/monthly'>月報を見る →</a></div>"
+        )
+    elif saved:
         what = "日報とSOAP" if soap is not None and not soap_failed else "日報"
+        same_day = _same_day_record_count(context) if saved == "saved" else 0
+        same_day_note = (
+            f"<br>この利用者・この訪問日の記録は、これで {same_day} 件になりました。"
+            "同じ訪問を二重に入力していないか確かめてください（月報では別々の訪問として数えます。"
+            "誤りは月報の画面から削除できます）。"
+            if same_day > 1
+            else ""
+        )
         saved_html = (
             f"<div class='save-note'>✓ {what}を保存しました"
             f"（利用者 {html.escape(context.subject_code)} ・ {html.escape(context.visited_on)}）。"
-            f"<a href='/monthly'>月報を見る →</a></div>"
+            f"<a href='/monthly'>月報を見る →</a>{same_day_note}</div>"
         )
     else:
         saved_html = (
@@ -1421,17 +1559,26 @@ def nippou_structure(
        設定ファイルと環境変数だけが変更経路になっている（privacy/config.py）。
     """
     context = _RecordContext(
-        procedures=procedures,
+        procedures=_validated_procedures(procedures),
         want_soap=bool(soap),
         subject_code=_validated_subject_code(subject_code),
         visited_on=_normalize_visited_on(visited_on),
     )
-    adapter = llm.LLMAdapter()
+    adapter = _new_adapter()
     tmp_path: Path | None = None
     try:
         agent = nippou.NippouAgent(adapter)
         if audio is not None and audio.filename:
-            suffix = Path(audio.filename).suffix or ".webm"
+            suffix = Path(audio.filename).suffix.lower() or ".webm"
+            if suffix not in nippou.AUDIO_SUFFIXES:
+                raise HTTPException(
+                    status_code=415,
+                    detail=(
+                        "この形式の音声ファイルは扱えません"
+                        f"（扱える形式: {'・'.join(sorted(e.lstrip('.') for e in nippou.AUDIO_SUFFIXES))}）。"
+                        "録音し直すか、文字で入力してください。"
+                    ),
+                )
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp_path = Path(tmp.name)
                 written = 0
@@ -1440,7 +1587,17 @@ def nippou_structure(
                     if written > MAX_AUDIO_BYTES:
                         raise HTTPException(status_code=413, detail="音声ファイルが大きすぎます。")
                     tmp.write(chunk)
-            text = agent.transcribe(tmp_path)
+            try:
+                text = agent.transcribe(tmp_path)
+            except Exception:  # noqa: BLE001 — 例外の中身（音声・パス）は出さず、次の行動だけ案内する
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "音声を文字に起こせませんでした。音声ファイルが壊れているか、文字起こしのモデルを"
+                        "まだ用意できていない可能性があります（初回はモデルのダウンロードにネットワークが必要です）。"
+                        "文字で入力するか、管理者に連絡してください。"
+                    ),
+                ) from None
         else:
             text = agent.transcribe(utterance_text)
         gate_result = _run_privacy_gate(text, adapter=adapter)
@@ -1467,12 +1624,12 @@ def nippou_recheck(
     再検査でも検査の厳しさは変えない（人が触ったから緩める、をしない）。
     """
     context = _RecordContext(
-        procedures=procedures,
+        procedures=_validated_procedures(procedures),
         want_soap=bool(soap),
         subject_code=_validated_subject_code(subject_code),
         visited_on=_normalize_visited_on(visited_on),
     )
-    adapter = llm.LLMAdapter()
+    adapter = _new_adapter()
     try:
         gate_result = _run_privacy_gate(sanitized_text, adapter=adapter)
     finally:
@@ -1636,7 +1793,7 @@ def before_after_compare(
     """
     diff = _load_checklist_diff(run_id, goal_ref.strip())
 
-    adapter = llm.LLMAdapter()
+    adapter = _new_adapter()
     try:
         gate_result = _run_privacy_gate(utterance_text, adapter=adapter)
     finally:
@@ -1645,6 +1802,7 @@ def before_after_compare(
     header = _before_after_header(run_id, diff)
 
     if not privacy.cleared_for_downstream(gate_result):
+        _save_privacy_audit(gate_result, proceeded=False)
         body = (
             header
             + _gate_summary_html(gate_result)
@@ -1653,7 +1811,7 @@ def before_after_compare(
         )
         return _render_page(body)
 
-    adapter = llm.LLMAdapter()
+    adapter = _new_adapter()
     try:
         agent = nippou.NippouAgent(adapter)
         agent.set_checklist(diff.before.items)
@@ -1703,177 +1861,6 @@ def _monthly_form_html(subject_code: str = "", month: str = "") -> str:
     """
 
 
-def _vital_chart_svg(report: monthly.MonthlyReport) -> str:
-    """バイタル折れ線（handoff §⑦: インラインSVG直書き・数値表が正、グラフは補助）。
-
-    y軸は 40〜160 固定（血圧・脈拍を1軸に載せるデザインどおり）。範囲外はクランプする。
-    点が2つ未満なら折れ線にならないので出さない。
-    """
-    points = [v for v in report.vitals if v.systolic or v.pulse]
-    if len(points) < 2:
-        return ""
-
-    left, right, top, bottom = 80, 640, 20, 150
-
-    def x_at(index: int) -> float:
-        return left + index * (right - left) / (len(points) - 1)
-
-    def y_at(value: float) -> float:
-        clamped = max(40.0, min(160.0, float(value)))
-        return bottom - (clamped - 40.0) * (bottom - top) / 120.0
-
-    def polyline(values: list, color: str, dashed: bool = False) -> str:
-        coords = " ".join(
-            f"{x_at(i):.0f},{y_at(v):.0f}" for i, v in enumerate(values) if v is not None
-        )
-        if coords.count(" ") < 1:
-            return ""
-        dash = " stroke-dasharray='4 3'" if dashed else ""
-        return f"<polyline fill='none' stroke='{color}' stroke-width='2'{dash} points='{coords}'/>"
-
-    lines = (
-        polyline([v.systolic for v in points], "var(--moegi)")
-        + polyline([v.diastolic for v in points], "var(--moegi-accent)")
-        + polyline([v.pulse for v in points], "var(--ink-soft)", dashed=True)
-    )
-
-    # 日付ラベルは最大4つに間引く（月/日だけ）
-    label_indexes = sorted({0, len(points) - 1, len(points) // 3, 2 * len(points) // 3})
-    date_labels = "".join(
-        f"<text x='{x_at(i):.0f}' y='166' text-anchor='middle' font-size='10' fill='var(--ink-soft)'>"
-        f"{html.escape(points[i].visited_on[5:].replace('-', '/'))}</text>"
-        for i in label_indexes
-    )
-
-    note = ""
-    if report.unparsed_vital_visits:
-        note = (
-            f"<p class='chart-note'>読み取れなかった訪問（{report.unparsed_vital_visits}件）は"
-            "グラフに含まれません。</p>"
-        )
-
-    return f"""
-    <div class="vital-chart">
-      <p class="chart-title">血圧（収縮期/拡張期）と脈拍 — 補助グラフ（数値は下の表が正）</p>
-      <svg viewBox="0 0 720 180" role="img" aria-label="血圧と脈拍の折れ線グラフ">
-        <line x1="{left - 40}" y1="{top}" x2="{left - 40}" y2="{bottom}" stroke="var(--line)" stroke-width="1"/>
-        <line x1="{left - 40}" y1="{bottom}" x2="700" y2="{bottom}" stroke="var(--line)" stroke-width="1"/>
-        <text x="{left - 46}" y="{top + 6}" text-anchor="end" font-size="10" fill="var(--ink-soft)">160</text>
-        <text x="{left - 46}" y="{(top + bottom) / 2 + 4:.0f}" text-anchor="end" font-size="10" fill="var(--ink-soft)">100</text>
-        <text x="{left - 46}" y="{bottom + 2}" text-anchor="end" font-size="10" fill="var(--ink-soft)">40</text>
-        {lines}
-        <text x="700" y="{y_at(points[-1].systolic) if points[-1].systolic else 55:.0f}" text-anchor="end" font-size="11" fill="var(--moegi)">収縮期</text>
-        <text x="700" y="{y_at(points[-1].diastolic) + 14 if points[-1].diastolic else 107:.0f}" text-anchor="end" font-size="11" fill="var(--moegi-accent)">拡張期</text>
-        <text x="700" y="{y_at(points[-1].pulse) + 28 if points[-1].pulse else 130:.0f}" text-anchor="end" font-size="11" fill="var(--ink-soft)">脈拍(破線)</text>
-        {date_labels}
-      </svg>
-      {note}
-    </div>
-    """
-
-
-def _monthly_report_html(report: monthly.MonthlyReport, subject_code: str) -> str:
-    if report.is_empty:
-        return f"""
-        <div class="empty-state">
-          <span class="empty-icon">🗒</span>
-          <p><strong>{report.year}年{report.month}月の日報はまだありません</strong></p>
-          <p>利用者 {html.escape(subject_code)} のこの月の日報が保存されると、ここに月報が表示されます。</p>
-          <a href="/nippou">日報を入力する →</a>
-        </div>"""
-
-    procedures = (
-        "".join(
-            f"<tr><td>{html.escape(name)}</td><td class='num'>{count}</td></tr>"
-            for name, count in sorted(report.procedure_counts.items(), key=lambda kv: (-kv[1], kv[0]))
-        )
-        or "<tr><td colspan='2' class='meta'>処置の選択がありませんでした。</td></tr>"
-    )
-
-    fill_rates = "".join(
-        f"<tr><td>{html.escape(r.label)}</td><td>"
-        f"<div class='rate-cell'><div class='rate-bar{' zero' if r.total and not r.filled else ''}'>"
-        f"<div class='rate-fill' style='width:{r.rate * 100:.0f}%'></div></div>"
-        f"<span class='rate-num'>{r.filled}/{r.total} ・ {r.rate * 100:.0f}%</span></div>"
-        f"</td></tr>"
-        for r in report.item_fill_rates
-    )
-
-    def _cell(value) -> str:
-        return "—" if value is None else html.escape(str(value))
-
-    vitals = (
-        "".join(
-            f"<tr><td>{html.escape(v.visited_on[5:].replace('-', '/'))}</td>"
-            f"<td class='num'>{_cell(v.systolic)}{'/' if v.systolic else ''}{_cell(v.diastolic) if v.systolic else ''}</td>"
-            f"<td class='num'>{_cell(v.temperature)}{'℃' if v.temperature else ''}</td>"
-            f"<td class='num'>{_cell(v.pulse)}</td>"
-            f"<td class='num'>{_cell(v.spo2)}{'%' if v.spo2 else ''}</td></tr>"
-            for v in report.vitals
-        )
-        or "<tr><td colspan='5' class='meta'>数値として読み取れたバイタルがありませんでした。</td></tr>"
-    )
-
-    notes = []
-    if report.unparsed_vital_visits:
-        notes.append(
-            f"バイタルを読み取れなかった訪問が <strong>{report.unparsed_vital_visits}件</strong> あります。"
-            "数値表では「—」と表示しています（0件として集計していません）。"
-        )
-    if report.non_passed_records:
-        notes.append(
-            f"Privacy Gate が passed 以外だった記録が <strong>{report.non_passed_records}件</strong> 含まれています"
-            "（段階導入モードで保存されたもの）。"
-        )
-    if len(report.policy_versions) > 1:
-        notes.append(
-            "複数の仮名化ポリシーバージョンの記録が混在しています（"
-            + "、".join(html.escape(v) for v in report.policy_versions)
-            + "）。"
-        )
-    notes_html = "".join(f"<div class='run-warning'>⚠️ <span>{n}</span></div>" for n in notes)
-
-    return f"""
-    <section>
-      <h2>{html.escape(subject_code)} ・ {report.year}年{report.month}月</h2>
-      <div class="stat-chips">
-        <span class="stat-chip">訪問 <strong>{report.visit_count}</strong> 回</span>
-        <span class="stat-chip">訪問日数 <strong>{report.visit_days}</strong> 日</span>
-        <span class="stat-chip">評価の記入 <strong>{report.evaluation_filled}/{report.evaluation_total}</strong></span>
-      </div>
-      {notes_html}
-      <p class="section-hint">安定仮名 {html.escape(report.subject_pseudonym)}</p>
-    </section>
-
-    <section>
-      <h2>処置別の実施回数</h2>
-      <table>
-        <thead><tr><th>処置</th><th class="num">実施回数</th></tr></thead>
-        <tbody>{procedures}</tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>チェックリスト項目の記入率</h2>
-      <table>
-        <thead><tr><th>項目</th><th>記入率（記入あり日報 / 全日報）</th></tr></thead>
-        <tbody>{fill_rates}</tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>バイタルの推移</h2>
-      {_vital_chart_svg(report)}
-      <div class="table-scroll">
-        <table>
-          <thead><tr><th>日付</th><th class="num">血圧</th><th class="num">体温</th><th class="num">脈拍</th><th class="num">SpO2</th></tr></thead>
-          <tbody>{vitals}</tbody>
-        </table>
-      </div>
-    </section>
-    """
-
-
 @app.get("/monthly", response_class=HTMLResponse)
 def monthly_form() -> HTMLResponse:
     """月報の作成フォーム（ledger R-84）。"""
@@ -1893,12 +1880,7 @@ def monthly_report(subject_code: str = Form(...), month: str = Form(...)) -> HTM
     （ブラウザ履歴・アクセスログ・Referer に識別子が残るのを避ける）。
     """
     subject_code = subject_code.strip()
-    try:
-        year, month_number = (int(part) for part in month.split("-", 1))
-        date(year, month_number, 1)  # 妥当な年月かをここで確定させる
-    except (ValueError, TypeError):
-        today = date.today()
-        year, month_number = today.year, today.month
+    year, month_number = _parse_month(month)
 
     subject_pseudonym = privacy_vault.stable_pseudonym(subject_code)
     conn = _db_conn()
@@ -1917,8 +1899,73 @@ def monthly_report(subject_code: str = Form(...), month: str = Form(...)) -> HTM
         "<p class='page-sub'>利用者コードと対象月を選んで作成します。</p>"
         + _monthly_form_html(subject_code, f"{year:04d}-{month_number:02d}")
         + _monthly_report_html(report, subject_code)
+        + _monthly_records_html(records, subject_code, f"{year:04d}-{month_number:02d}")
     )
     return _render_page(body)
+
+
+def _parse_month(month: str) -> tuple[int, int]:
+    """「2026-08」形式の対象月を数値にする。不正な値は当月に置き換えず、エラーにする
+    （違う月の月報を見て、記録が無いと勘違いするのを防ぐ）。"""
+    try:
+        year, month_number = (int(part) for part in month.strip().split("-", 1))
+        date(year, month_number, 1)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=422, detail="対象月の形式が正しくありません。月報の画面で月を選び直してください。"
+        ) from None
+    return year, month_number
+
+
+def _monthly_records_html(records: list[dict], subject_code: str, month: str) -> str:
+    """その月に保存されている日報の一覧。誤って保存した記録（二重入力など）を削除できる。"""
+    if not records:
+        return ""
+    rows = []
+    for record in records:
+        filled = sum(1 for item in record["items"] if item.get("filled"))
+        rows.append(
+            "<li>"
+            f"<span class='run-when'>{html.escape(record['visited_on'])}</span>"
+            f"<span class='run-target'>項目 {filled}/{len(record['items'])} 記入"
+            f"{'・SOAPあり' if record['soap'] else ''}"
+            f"・保存 {html.escape(str(record['created_at'])[:16])}</span>"
+            f"<form method='post' action='/nippou/records/{record['row_id']}/delete'"
+            " onsubmit=\"return confirm('この日報を削除します。元に戻せません。よろしいですか？');\">"
+            f"<input type='hidden' name='subject_code' value='{html.escape(subject_code)}'>"
+            f"<input type='hidden' name='month' value='{html.escape(month)}'>"
+            "<button type='submit' class='btn-secondary'>削除</button></form></li>"
+        )
+    return (
+        "<section><h2>この月に保存されている日報</h2>"
+        "<p class='section-hint'>二重に入力した・利用者を間違えたなどの記録は、ここで削除できます"
+        "（削除すると月報の集計からも外れ、元に戻せません）。</p>"
+        f"<ul class='run-list'>{''.join(rows)}</ul></section>"
+    )
+
+
+@app.post("/nippou/records/{record_row_id}/delete", response_class=HTMLResponse)
+def delete_nippou_record(
+    record_row_id: int, subject_code: str = Form(...), month: str = Form("")
+) -> HTMLResponse:
+    """保存済みの日報を1件削除する。利用者コードが一致する記録だけが対象。"""
+    subject_pseudonym = privacy_vault.stable_pseudonym(subject_code.strip())
+    conn = _db_conn()
+    try:
+        deleted = store.delete_nippou_record(conn, record_row_id, subject_pseudonym=subject_pseudonym)
+    finally:
+        conn.close()
+    if not deleted:
+        return _error_page(
+            "日報を削除できませんでした",
+            "指定された日報が見つかりません（すでに削除されている可能性があります）。月報の画面で確かめてください。",
+            404,
+        )
+    return _render_page(
+        "<h1>日報を削除しました</h1>"
+        "<div class='save-note'>✓ 日報を1件削除しました。月報の集計からも外れています。</div>"
+        "<p class='back-link'><a href='/monthly'>← 月報に戻る</a></p>"
+    )
 
 
 @app.get("/deliveries", response_class=HTMLResponse)
@@ -1963,6 +2010,11 @@ def deliveries_page() -> HTMLResponse:
             is_pending = r["status"] == "pending"
             if r["status"] == "cancelled":
                 chip = "<span class='chip chip-pending'>取り消し済み（却下・再編集のため）</span>"
+            elif r["status"] == "failed":
+                chip = (
+                    "<span class='chip chip-rejected'>✕ 送信失敗（試行の上限）。宛先・SMTP設定を確かめて、"
+                    "更新案を承認し直してください</span>"
+                )
             elif is_pending:
                 chip = "<span class='chip chip-queued'>⏳ 送信待ち</span>"
             else:
@@ -1988,7 +2040,8 @@ def deliveries_page() -> HTMLResponse:
 
     body = f"""
     <h1>配信キュー</h1>
-    <p class="page-sub">承認済みの変更が現場の記録画面に届くまでの状況です。{channel_note}</p>
+    <p class="page-sub">承認した変更の通知（メール）の送信状況です。{channel_note}
+      現場の日報入力のチェックリストへの反映は、承認した時点で行われ、このキューとは関係ありません。</p>
     {summary}
     <p class="auto-note">送信は自動でリトライされます（このページに再送ボタンはありません —
       押さないと届かない仕組みにしないためです）。積まれるのは承認済み更新案のみで、

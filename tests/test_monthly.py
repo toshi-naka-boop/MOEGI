@@ -400,12 +400,15 @@ class MonthlyWebTest(unittest.TestCase):
         # handoff §⑦ の空状態文言（旧:「…の日報がありません」）
         self.assertIn("日報はまだありません", response.text)
 
-    def test_invalid_month_falls_back_without_error(self):
+    def test_invalid_month_is_rejected_with_a_japanese_message(self):
+        # 黙って当月に置き換えると、別の月の月報を見て「記録が無い」と勘違いする
         with mock.patch.dict(os.environ, {vault.KEY_ENV_VAR: _TEST_VAULT_KEY}):
-            response = self.client.post(
-                "/monthly", data={"subject_code": "P-100987", "month": "not-a-month"}
-            )
-        self.assertEqual(response.status_code, 200)
+            for bad in ("not-a-month", "2026-13"):
+                response = self.client.post(
+                    "/monthly", data={"subject_code": "P-100987", "month": bad}
+                )
+                self.assertEqual(response.status_code, 422, bad)
+                self.assertIn("対象月の形式が正しくありません", response.text)
 
 
 if __name__ == "__main__":

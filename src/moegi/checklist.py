@@ -28,6 +28,8 @@ def _new_item_id(label: str, existing: list[ChecklistItem]) -> str:
     ラベルのハッシュから決定論的に作る——同じ更新案を2回適用しても同じIDになるので、
     Before/After比較をやり直しても日報・月報との紐付けがぶれない。衝突した場合だけ
     連番を足す（実質起きないが、起きたときに黙って上書きしない）。
+    注意: IDは承認時点の文言から作るため、新規項目の文言を後から編集するとIDも変わり、
+    編集前の日報とは別の項目として集計される（既存項目の文言変更は不変IDなので影響しない）。
     """
     base = f"item-{hashlib.sha1(label.encode('utf-8')).hexdigest()[:10]}"
     taken = {item.key for item in existing}
@@ -91,6 +93,8 @@ def apply_approved(
         target_key = proposal.get("sitedoc_item_key")
         target_label = proposal.get("sitedoc_item_id")
         if target_key is None and target_label is None:
+            if any(item.label == after_label for item in items):
+                continue  # 別の分析で同じ新規項目が承認済み。二重に追加しない
             new_item = ChecklistItem(
                 sitedoc_id=sitedoc.id,
                 label=after_label,

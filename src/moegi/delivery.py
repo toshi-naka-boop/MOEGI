@@ -39,11 +39,10 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
 
-from moegi import store
+from moegi import paths, store
 from moegi.privacy import rules
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTBOX_DIR = _REPO_ROOT / "data" / "outbox"
+DEFAULT_OUTBOX_DIR = paths.data_dir() / "outbox"
 
 CHANNEL_EMAIL = "email"
 CHANNEL_FILE = "file"
@@ -149,8 +148,19 @@ class SmtpSender:
 
     def send(self, delivery: dict) -> None:
         config = self._config
-        with smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=10) as client:
-            client.starttls()
+        if config.smtp_port == 465:
+            # 465番は最初から暗号化された接続（SMTPS）。STARTTLS ではない。
+            client_cm = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=10)
+        else:
+            client_cm = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=10)
+        with client_cm as client:
+            if config.smtp_port != 465:
+                client.ehlo()
+                if not client.has_extn("starttls"):
+                    # 暗号化できないサーバーへパスワードや本文を平文で送らない。
+                    raise smtplib.SMTPNotSupportedError("STARTTLS 非対応のサーバーです")
+                client.starttls()
+                client.ehlo()
             if config.smtp_user:
                 client.login(config.smtp_user, config.smtp_password)
             client.send_message(_build_message(config, delivery))
@@ -184,6 +194,16 @@ def _screen_body(text: str, *, today: tuple[int, int, int]) -> list[str]:
     return sorted({d.type for d in rules.detect(normalized, today=today)})
 
 
+def screen_notice(rows: list[dict], *, today: tuple[int, int, int]) -> list[str]:
+    """承認通知（件名・本文）に識別子らしき文字列が含まれていないかを検査し、検出種別を返す。
+
+    承認・編集の保存の前に呼び、空でなければ**承認も保存もしない**（配信だけ止めて、FAX や
+    日報のチェックリストには載る、という食い違いを作らないため）。値そのものは返さない。
+    """
+    subject, body = format_proposal_notice(rows)
+    return _screen_body(f"{subject}\n{body}", today=today)
+
+
 def enqueue(
     conn: sqlite3.Connection,
     *,
@@ -206,6 +226,9 @@ def enqueue(
             "外部送信できない情報が含まれているため配信キューに積みませんでした"
             f"（検出種別: {', '.join(found)}）"
         )
+    existing = store.find_pending_delivery(conn, subject=subject, body=body)
+    if existing is not None:
+        return existing  # 承認ボタンの二度押し・戻る→再送信で、同じ通知を二重に積まない
     return store.save_delivery(
         conn,
         run_id=run_id,
@@ -247,12 +270,20 @@ def flush(
 
     sender = sender or build_sender(config)
     for delivery in pending:
+        # 読み出したあとに却下で取り消された通知は送らない（誤った手順を配らない）。
+        if not store.is_delivery_pending(conn, delivery["row_id"]):
+            continue
         try:
             sender.send(delivery)
+        except (smtplib.SMTPRecipientsRefused, smtplib.SMTPNotSupportedError, smtplib.SMTPAuthenticationError):
+            # 宛先拒否・STARTTLS 非対応など、待っても直らない失敗。この通知は試行回数を数え、
+            # 上限で「送信失敗」にして、後ろの通知は流し続ける。
+            store.mark_delivery_attempt_failed(conn, delivery["row_id"], "send_rejected")
+            result.failed += 1
         except (OSError, smtplib.SMTPException):
             store.mark_delivery_attempt_failed(conn, delivery["row_id"], "send_failed")
             result.failed += 1
-            # 1件目で落ちるなら回線side の問題が濃い。残りも同じ理由で落ちるので打ち切る。
+            # 接続できない（回線側の問題）なら残りも同じ理由で落ちるので打ち切る。
             break
         else:
             store.mark_delivery_sent(conn, delivery["row_id"])

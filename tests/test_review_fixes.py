@@ -94,12 +94,16 @@ class ProposalFlowTest(_WebCase):
         self.assertEqual(len(pending), 1)
         self.assertIn("直した文言", pending[0]["body"])
 
-    def test_refused_delivery_is_shown_to_the_approver(self):
+    def test_approval_with_identifier_is_refused_and_not_applied_anywhere(self):
+        # 識別子入りの文言は、承認そのものを止める（配信だけ止めて FAX・日報には載る、を作らない）
         row = _seed(self.conn, after="連絡先は 090-1234-5678 です")
         r = self.client.post(f"/proposals/{row}/approve")
-        self.assertIn("notice=delivery_refused", r.headers["location"])
+        self.assertIn("notice=approve_refused", r.headers["location"])
         self.assertEqual(store.count_pending_deliveries(self.conn), 0)
-        self.assertIn("配信は行っていません", self.client.get(r.headers["location"]).text)
+        self.assertIn("承認していません", self.client.get(r.headers["location"]).text)
+        status = self.conn.execute("SELECT status FROM proposals WHERE row_id = ?", (row,)).fetchone()[0]
+        self.assertEqual(status, "未承認")
+        self.assertEqual(store.list_applied_proposals(self.conn), [])
 
     def test_unknown_ids_return_japanese_404(self):
         for path in ("/proposals/99999/approve", "/proposals/99999/reject"):

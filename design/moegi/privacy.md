@@ -144,7 +144,7 @@ type PrivacyGateStatus = "pending" | "passed" | "review_required" | "blocked" | 
 | 残存リスクが `max_residual_risk` を超える | `review_required` |
 | 入出力の差分が `max_removal_ratio` を超える | `review_required` |
 | 再検査で禁止対象が残っていた | `review_required`（秘密情報なら `blocked`） |
-| 仮名対応表の保存に失敗 | `failed` |
+| 仮名対応表の保存に失敗（仮名化した箇所があるのに対応表DBを開けない場合を含む。画面は `require_vault=True` で呼ぶ） | `failed` |
 
 `run_gate()` はどの経路でも例外を投げず `GateResult.status` で返す。呼び出し側が例外を
 握り潰しても、`cleared_for_downstream()` を通らないかぎり既存処理には進めない。

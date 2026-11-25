@@ -27,9 +27,11 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from moegi import paths
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_VAULT_DB_PATH = _REPO_ROOT / "data" / "privacy_vault.db"
-DEFAULT_KEY_PATH = _REPO_ROOT / "data" / ".vault_key"
+DEFAULT_VAULT_DB_PATH = paths.data_dir() / "privacy_vault.db"
+DEFAULT_KEY_PATH = paths.data_dir() / ".vault_key"
 
 KEY_ENV_VAR = "MOEGI_VAULT_KEY"
 _KEY_BYTES = 32  # AES-256

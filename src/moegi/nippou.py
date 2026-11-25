@@ -46,7 +46,17 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # 場合や、パイプライン側のimportコストを抑えるため）。
 # .webm はブラウザのMediaRecorder API既定の出力形式（webapp.py の録音UI・ledger R-80）。
 # faster-whisperはPyAV経由でデコードするためコンテナ形式は問わない。
-_AUDIO_SUFFIXES = frozenset({".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"})
+_AUDIO_SUFFIXES = frozenset(
+    {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac", ".mp4", ".opus", ".3gp"}
+)
+
+
+#: 画面（webapp）が、受け付ける音声ファイルの拡張子を案内・検査するために使う。
+AUDIO_SUFFIXES = _AUDIO_SUFFIXES
+
+
+class UnsupportedAudioError(ValueError):
+    """音声ファイルとして扱えない拡張子・存在しないファイル。"""
 
 
 @dataclass
@@ -192,7 +202,13 @@ class NippouAgent:
         （ledger N-11）。音声ファイルパスが渡された場合だけASRを起動し、それ以外
         （すでに文字起こし済みのテキスト）はそのまま返す。
         """
-        path = input_ if isinstance(input_, Path) else Path(str(input_))
+        if isinstance(input_, Path):
+            # Path で渡されたものは必ずファイル。拡張子が音声でなければ、ファイル名の文字列を
+            # 「発話」として下流へ流さずに止める（静かに中身の無い日報になるのを防ぐ）。
+            if input_.suffix.lower() not in _AUDIO_SUFFIXES or not input_.exists():
+                raise UnsupportedAudioError("音声ファイルとして読み込めません")
+            return self._transcribe_audio(input_)
+        path = Path(str(input_))
         if path.suffix.lower() in _AUDIO_SUFFIXES and path.exists():
             return self._transcribe_audio(path)
         return str(input_)

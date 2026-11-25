@@ -92,9 +92,10 @@ else
   if [ "${HOST}" = "0.0.0.0" ]; then
     echo " Android      : 上の「同一ネットワーク」URLをそのまま開く（証明書もCAも不要）"
   fi
-  echo "                ※ 録音UIだけはマイクの都合でHTTPでは動きません。"
-  echo "                   録音を実機で試すなら Chrome の Port forwarding で"
-  echo "                   http://localhost:${PORT}/nippou を使ってください。"
+  if [ "${HOST}" = "0.0.0.0" ]; then
+    echo "                ※ 他の端末（スマホなど）からは、HTTPのため録音ボタンが使えません（文字入力は使えます）。"
+    echo "                   このPCのブラウザで http://localhost:${PORT}/nippou を開けば、録音も使えます。"
+  fi
 fi
 if [ "${HOST}" = "127.0.0.1" ]; then
   echo " ※ このPCだけで待ち受けています。他の端末から開く場合は MOEGI_LAN=1 と MOEGI_ACCESS_TOKEN を指定してください。"

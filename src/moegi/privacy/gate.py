@@ -182,12 +182,16 @@ def run_gate(
     site_id: str = "",
     today: tuple[int, int, int] | None = None,
     dictionary: dict_module.Dictionary | None = None,
+    require_vault: bool = False,
 ) -> GateResult:
     """仮名化・安全検査を実行する（design/moegi/privacy.md §4 のデータフロー）。
 
     adapter    : llm.LLMAdapter。None または config.llm_detection=False ならLLM補完検出を行わない
     vault_conn : vault.connect() の接続。None なら対応表を保存しない（保存不要の再検査等）
     dictionary : 事前ロード済み辞書。None ならこの関数が config.dictionary_path から読む
+    require_vault : True なら、仮名化した箇所があるのに対応表を保存できない（vault_conn が None
+                  を含む）とき fail-closed で FAILED にする。画面（webapp）は常に True で呼ぶ。
+                  False（既定）は、保存先を持たない単体呼び出し・再検査用
     today      : 生年月日→年代の基準日。テストの再現性のため明示指定できる
 
     どの失敗経路でも例外は投げず、GateResult の status で返す。呼び出し側が
@@ -323,7 +327,11 @@ def run_gate(
     # --- 仮名対応表の保存（保存できなければ fail-closed・§9） ---------------------
     mapping_saved = False
     mapping = allocator.mapping
-    if vault_conn is not None and mapping:
+    if vault_conn is None and mapping and require_vault:
+        reason_codes.append("vault_save_failed")
+        status = _worst(status, PrivacyGateStatus.FAILED)
+        needs_human_review = True
+    elif vault_conn is not None and mapping:
         try:
             vault.save_mapping(
                 vault_conn,

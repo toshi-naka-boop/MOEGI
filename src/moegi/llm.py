@@ -270,6 +270,9 @@ class LLMAdapter:
         #: ローカルLLMへ接続できなかった（または応答が読めなかった）回数。
         #: 呼び出し側（Web画面）が「AIに接続できない」と案内するために読む。
         self.local_unavailable_count = 0
+        #: ローカル呼び出しのうち、タイムアウトした回数・呼び出し総数（画面が「判定不能だらけ」を検知する）
+        self.local_timeout_count = 0
+        self.local_call_count = 0
 
     def close(self) -> None:
         if self._owns_client:
@@ -488,6 +491,7 @@ class LLMAdapter:
 
         local_timeout = opts.get("local_timeout", LOCAL_CALL_TIMEOUT_SECONDS)
         start = time.monotonic()
+        self.local_call_count += 1
         try:
             response = self._client.post(
                 f"{self._ollama_base_url.rstrip('/')}/v1/chat/completions",
@@ -500,7 +504,9 @@ class LLMAdapter:
             # パイプラインごと落ちるため、timeout=Trueを付けて返す。呼び出し元が
             # 当該項目を「判定不能」として記録し、パイプラインを続行させる。
             latency_ms = (time.monotonic() - start) * 1000
-            if not isinstance(exc, httpx.TimeoutException):
+            if isinstance(exc, httpx.TimeoutException):
+                self.local_timeout_count += 1
+            else:
                 self.local_unavailable_count += 1
             return {
                 "text": "",

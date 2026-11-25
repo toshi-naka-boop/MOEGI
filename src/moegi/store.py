@@ -16,14 +16,17 @@ design.md §6.4:
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB_PATH = _REPO_ROOT / "data" / "moegi.db"
+from moegi import paths
+
+DEFAULT_DB_PATH = paths.data_dir() / "moegi.db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS cost_records (
@@ -163,7 +166,13 @@ def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     """
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    existed = path.exists()
     conn = sqlite3.connect(path)
+    if not existed or (path.stat().st_mode & 0o077):
+        # 日報（仮名化済みでも病状・服薬を含む）を入れるDBなので、所有者だけが読める権限にする。
+        # 権限を変えられない環境（一部の共有フォルダ等）でも起動は止めない。
+        with contextlib.suppress(OSError):
+            os.chmod(path, 0o600)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(cost_records)")}
@@ -395,13 +404,6 @@ def get_proposal_run_id(conn: sqlite3.Connection, proposal_row_id: int) -> str |
     return row[0] if row else None
 
 
-def run_exists(conn: sqlite3.Connection, run_id: str) -> bool:
-    return (
-        conn.execute("SELECT 1 FROM proposals WHERE run_id = ? LIMIT 1", (run_id,)).fetchone()
-        is not None
-    )
-
-
 def list_applied_proposals(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """承認・編集済の更新案を、全 run 分まとめて古い順に返す（日報入力のチェックリスト改定用）。
 
@@ -554,6 +556,59 @@ def save_nippou_record(
     return cursor.lastrowid
 
 
+def _without_utterance_id(soap: dict[str, Any] | None) -> dict[str, Any] | None:
+    """SOAPの utterance_id は保存のたびに変わる識別子なので、内容の比較からは外す。"""
+    return None if soap is None else {k: v for k, v in soap.items() if k != "utterance_id"}
+
+
+def find_duplicate_nippou_record(
+    conn: sqlite3.Connection,
+    *,
+    subject_pseudonym: str,
+    visited_on: str,
+    items: list[dict[str, Any]],
+    procedures: list[str],
+    evaluation: dict[str, Any] | None,
+    soap: dict[str, Any] | None,
+) -> int | None:
+    """同じ利用者・訪問日で、内容がまったく同じ日報が既にあればその行ID。
+
+    再検査や戻るボタンでの二重保存で、月報の訪問回数・処置回数が二重に数えられるのを防ぐ。
+    内容が少しでも違えば別の訪問として扱う（同じ日に2回訪問することはあるため）。
+    """
+    for row in conn.execute(
+        "SELECT row_id, items, evaluation, procedures, soap FROM nippou_records "
+        "WHERE subject_pseudonym = ? AND visited_on = ?",
+        (subject_pseudonym, visited_on),
+    ).fetchall():
+        if (
+            json.loads(row[1]) == items
+            and (json.loads(row[2]) if row[2] else None) == evaluation
+            and json.loads(row[3]) == procedures
+            and _without_utterance_id(json.loads(row[4]) if row[4] else None)
+            == _without_utterance_id(soap)
+        ):
+            return row[0]
+    return None
+
+
+def count_nippou_records_on(conn: sqlite3.Connection, *, subject_pseudonym: str, visited_on: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM nippou_records WHERE subject_pseudonym = ? AND visited_on = ?",
+        (subject_pseudonym, visited_on),
+    ).fetchone()[0]
+
+
+def delete_nippou_record(conn: sqlite3.Connection, row_id: int, *, subject_pseudonym: str) -> bool:
+    """日報を1件削除する（誤って保存した記録を取り消すため）。利用者が一致するものだけ消す。"""
+    cursor = conn.execute(
+        "DELETE FROM nippou_records WHERE row_id = ? AND subject_pseudonym = ?",
+        (row_id, subject_pseudonym),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
 def _nippou_row_to_dict(row: tuple) -> dict[str, Any]:
     record = dict(zip(_NIPPOU_COLUMNS, row))
     record["items"] = json.loads(record["items"])
@@ -657,24 +712,51 @@ def list_deliveries(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict[s
     return [_delivery_row_to_dict(row) for row in rows]
 
 
-def mark_delivery_sent(conn: sqlite3.Connection, row_id: int) -> None:
-    conn.execute(
+def mark_delivery_sent(conn: sqlite3.Connection, row_id: int) -> bool:
+    """送信済みにする。まだ「送信待ち」のものだけが対象（取り消し済みを上書きしない）。
+
+    戻り値は更新できたか。
+    """
+    cursor = conn.execute(
         "UPDATE delivery_queue SET status = 'sent', attempts = attempts + 1, "
-        "last_error_code = NULL, sent_at = datetime('now') WHERE row_id = ?",
+        "last_error_code = NULL, sent_at = datetime('now') WHERE row_id = ? AND status = 'pending'",
         (row_id,),
     )
     conn.commit()
+    return cursor.rowcount > 0
+
+
+def is_delivery_pending(conn: sqlite3.Connection, row_id: int) -> bool:
+    row = conn.execute("SELECT status FROM delivery_queue WHERE row_id = ?", (row_id,)).fetchone()
+    return bool(row) and row[0] == "pending"
+
+
+def find_pending_delivery(conn: sqlite3.Connection, *, subject: str, body: str) -> int | None:
+    """同じ件名・本文の「送信待ち」があればその行ID（二重に積まないため）。"""
+    row = conn.execute(
+        "SELECT row_id FROM delivery_queue WHERE status = 'pending' AND subject = ? AND body = ? "
+        "ORDER BY row_id LIMIT 1",
+        (subject, body),
+    ).fetchone()
+    return row[0] if row else None
+
+
+#: 送信を試みる回数の上限。超えたら「送信失敗」にして、後続の通知を詰まらせない。
+MAX_DELIVERY_ATTEMPTS = 10
 
 
 def mark_delivery_attempt_failed(conn: sqlite3.Connection, row_id: int, error_code: str) -> None:
     """送信に失敗した。**status は pending のまま**にする（G8: 消えたのではなく待っている）。
+    ただし試行が MAX_DELIVERY_ATTEMPTS 回に達したら 'failed' にして、後続の通知を詰まらせない。
 
     error_code は語彙が決まった短い文字列だけを渡すこと（例外メッセージを入れない。
     宛先や本文が混じり得るため——design/moegi/privacy.md §10）。
     """
     conn.execute(
-        "UPDATE delivery_queue SET attempts = attempts + 1, last_error_code = ? WHERE row_id = ?",
-        (error_code, row_id),
+        "UPDATE delivery_queue SET attempts = attempts + 1, last_error_code = ?, "
+        "status = CASE WHEN attempts + 1 >= ? THEN 'failed' ELSE status END "
+        "WHERE row_id = ? AND status = 'pending'",
+        (error_code, MAX_DELIVERY_ATTEMPTS, row_id),
     )
     conn.commit()
 
