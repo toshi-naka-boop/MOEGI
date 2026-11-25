@@ -1112,3 +1112,24 @@ class DetectionLabelTest(unittest.TestCase):
                 self.assertNotEqual(
                     self.webapp._reason_text(code), code, f"{code} の日本語表示が無い"
                 )
+
+
+class RoundThreeFixesTest(unittest.TestCase):
+    """採点 r3 の指摘（2桁の日・話し言葉の番号・適用日の誤検出）の回帰テスト。"""
+
+    def _sanitize(self, text):
+        return rules.apply_detections(text, rules.detect(text, today=_TODAY))
+
+    def test_two_digit_day_is_not_truncated_in_birthdate(self):
+        out = self._sanitize("1943年5月20日生まれ")
+        self.assertEqual(out, "(80代)生まれ")
+        self.assertEqual(self._sanitize("1943/12/31生まれ"), "(80代)生まれ")
+
+    def test_recent_visit_date_is_kept(self):
+        text = "2026年11月20日 10時訪問。前回は2026/11/12"
+        self.assertEqual(self._sanitize(text), text)
+
+    def test_insurance_number_with_particle_is_blocking(self):
+        for text in ("保険証番号は12345678です", "保険証の番号は12345678", "診察券番号は5555"):
+            types = {d.type for d in rules.detect(text, today=_TODAY)}
+            self.assertTrue(types & {"insurance_number", "medical_card_number"}, text)

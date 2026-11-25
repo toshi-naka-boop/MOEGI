@@ -191,7 +191,15 @@ def _screen_body(text: str, *, today: tuple[int, int, int]) -> list[str]:
     値そのものは返さない（呼び出し側が例外メッセージへ載せて漏らすのを防ぐ）。
     """
     normalized = unicodedata.normalize("NFKC", text)
-    return sorted({d.type for d in rules.detect(normalized, today=today)})
+    # 改定通知には適用日（「令和6年6月1日から」等）が普通に入る。日付は「生まれ」「生年月日」などの
+    # 文脈があるときだけ生年月日とみなす（適用日で承認が止まる誤検出を避ける）。
+    return sorted(
+        {
+            d.type
+            for d in rules.detect(normalized, today=today)
+            if d.type != "birthdate" or rules._has_birth_context(normalized, d.start, d.end)
+        }
+    )
 
 
 def screen_notice(rows: list[dict], *, today: tuple[int, int, int]) -> list[str]:

@@ -78,8 +78,8 @@ _POSTAL_RE = re.compile(r"〒? ?(?<![0-9０-９])[0-9０-９]{3}[\-−ー－][0-
 
 _BIRTHDATE_WESTERN_RE = re.compile(
     r"(?<![0-9])(?P<year>1[89][0-9]{2}|20[0-9]{2})[年/\-.]"
-    r"(?P<month>0?[1-9]|1[0-2])[月/\-.]"
-    r"(?P<day>0?[1-9]|[12][0-9]|3[01])日?"
+    r"(?P<month>1[0-2]|0?[1-9])[月/\-.]"
+    r"(?P<day>3[01]|[12][0-9]|0?[1-9])(?![0-9])日?"
 )
 _ERA_OFFSETS = {"明治": 1867, "大正": 1911, "昭和": 1925, "平成": 1988, "令和": 2018}
 _BIRTHDATE_ERA_RE = re.compile(
@@ -90,9 +90,9 @@ _BIRTHDATE_ERA_RE = re.compile(
 # 番号系はラベルつきで拾う。裸の数字列を番号扱いすると、バイタル値や訪問時間まで
 # 巻き込んで臨床情報を壊す（§6「病名・症状・バイタルは原則保持」に反する）。
 _INSURANCE_RE = re.compile(
-    r"(?:被保険者証番号|被保険者番号|保険証番号|保険者番号|記号番号)\s?[：:＝=]?\s?[0-9０-９A-Za-z\-−]{4,24}"
+    r"(?:被保険者証番号|被保険者番号|保険証番号|保険証の番号|保険者番号|記号番号)\s?(?:は|が|の)?\s?[：:＝=]?\s?[0-9０-９A-Za-z\-−]{4,24}"
 )
-_MEDICAL_CARD_RE = re.compile(r"(?:診察券番号|診察券|カルテ番号|カルテNo\.?)\s?[：:＝=]?\s?[0-9０-９A-Za-z\-−]{4,24}")
+_MEDICAL_CARD_RE = re.compile(r"(?:診察券番号|診察券の番号|診察券|カルテ番号|カルテNo\.?)\s?(?:は|が|の)?\s?[：:＝=]?\s?[0-9０-９A-Za-z\-−]{4,24}")
 _PATIENT_ID_RE = re.compile(
     r"(?:利用者ID|利用者番号|患者ID|患者番号|利用者コード)\s?[：:＝=]?\s?[0-9０-９A-Za-z\-−]{2,24}"
 )
@@ -172,6 +172,22 @@ def _age_bucket(birth_year: int, birth_month: int, birth_day: int, today: tuple[
     return f"({age // 10 * 10}代)"
 
 
+_BIRTH_CONTEXT_AFTER = re.compile(r"\s?(?:生まれ|生れ|生)")
+_BIRTH_CONTEXT_BEFORE = re.compile(r"(?:生年月日|誕生日|生年)\s?[：:＝=は]?\s?$")
+
+
+def _has_birth_context(text: str, start: int, end: int) -> bool:
+    """日付の前後に「生まれ」「生年月日」などがあるか。"""
+    return bool(
+        _BIRTH_CONTEXT_AFTER.match(text, end) or _BIRTH_CONTEXT_BEFORE.search(text[max(0, start - 8) : start])
+    )
+
+
+def _is_recent_or_future(year: int, month: int, day: int, today: tuple[int, int, int]) -> bool:
+    """満1歳に達していない（直近1年以内・未来）日付か。訪問日や適用日であって生年月日ではない可能性が高い。"""
+    return (today[0] - year - ((today[1], today[2]) < (month, day))) < 1
+
+
 def _address_detections(text: str) -> list[Detection]:
     """住所を都道府県レベルへ一般化する（§6「地域レベルへ一般化」）。"""
     results: list[Detection] = []
@@ -218,6 +234,10 @@ def _phone_detections(text: str) -> list[Detection]:
 def _birthdate_detections(text: str, today: tuple[int, int, int]) -> list[Detection]:
     results: list[Detection] = []
     for match in _BIRTHDATE_WESTERN_RE.finditer(text):
+        if _is_recent_or_future(
+            int(match.group("year")), int(match.group("month")), int(match.group("day")), today
+        ) and not _has_birth_context(text, match.start(), match.end()):
+            continue
         results.append(
             Detection(
                 type="birthdate",
@@ -233,6 +253,10 @@ def _birthdate_detections(text: str, today: tuple[int, int, int]) -> list[Detect
     for match in _BIRTHDATE_ERA_RE.finditer(text):
         era_year = 1 if match.group("year") == "元" else int(match.group("year"))
         year = _ERA_OFFSETS[match.group("era")] + era_year
+        if _is_recent_or_future(
+            year, int(match.group("month")), int(match.group("day")), today
+        ) and not _has_birth_context(text, match.start(), match.end()):
+            continue
         results.append(
             Detection(
                 type="birthdate",

@@ -337,3 +337,18 @@ class DeliveryWebTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoticeDateScreeningTest(unittest.TestCase):
+    """改定通知の適用日は識別子として止めない。生年月日の文脈があれば止める。"""
+
+    def _screen(self, after: str) -> list[str]:
+        rows = [{"sitedoc_item_id": "item-1", "before": None, "after": after, "new_path": "第4の4"}]
+        return delivery.screen_notice(rows, today=_TODAY)
+
+    def test_effective_date_is_not_blocked(self):
+        self.assertEqual(self._screen("令和6年6月1日から適用する"), [])
+        self.assertEqual(self._screen("2024年6月1日以降に記録する"), [])
+
+    def test_birthdate_with_context_is_blocked(self):
+        self.assertIn("birthdate", self._screen("1943年5月20日生まれの方"))

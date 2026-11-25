@@ -273,7 +273,24 @@ class NippouAgent:
                 undecidable=True,
             )
 
-        payload = _extract_json_payload(result["text"]) or {}
+        payload = _extract_json_payload(result["text"])
+        if not payload:
+            # JSON として読めない応答は、全項目「未記入」の日報として保存しない（SOAP と同じ扱い）。
+            items = [
+                NippouItem(
+                    checklist_item_id=item.label, value="", filled=False, checklist_item_key=item.key
+                )
+                for item in self._checklist
+            ]
+            evaluation = self._build_evaluation(goal_item, None) if goal_item else None
+            return NippouRecord(
+                checklist_version=checklist_version,
+                utterance_id=utterance_id,
+                items=items,
+                evaluation=evaluation,
+                procedures=procedures,
+                undecidable=True,
+            )
         entries_by_id = {
             str(e["item_id"]).strip(): e
             for e in payload.get("items") or []

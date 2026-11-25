@@ -238,3 +238,15 @@ class DemoTest(_WebCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubjectCodeRequiredTest(_WebCase):
+    def test_forms_start_with_empty_required_choice(self):
+        html_text = self.client.get("/nippou").text
+        self.assertIn("（選んでください）", html_text)
+        self.assertIn("required", html_text)
+
+    def test_monthly_without_subject_is_422(self):
+        r = self.client.post("/monthly", data={"subject_code": "", "month": "2026-11"})
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("利用者コード", r.text)

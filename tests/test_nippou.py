@@ -76,6 +76,13 @@ class StructureTest(unittest.TestCase):
             ChecklistItem(sitedoc_id="s", label="特記事項", kind="自由記述"),
         ]
 
+    def test_unparsable_llm_response_is_undecidable(self):
+        agent = nippou.NippouAgent(_FakeAdapter(["これはJSONではありません"]))
+        agent.set_checklist(self.items)
+        record = agent.structure("訪問終了。")
+        self.assertTrue(record.undecidable)
+        self.assertFalse(any(i.filled for i in record.items))
+
     def test_marks_items_filled_or_not_from_llm_response(self):
         adapter = _FakeAdapter(
             [

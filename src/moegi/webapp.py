@@ -90,7 +90,8 @@ def _patient_code_options(selected: str = "") -> str:
         dictionary = privacy_dictionary.load_dictionary(PRIVACY_CONFIG.dictionary_path)
     except Exception:  # noqa: BLE001 — 辞書の中身を例外経由で外へ出さない
         return ""
-    return "".join(
+    placeholder = f"<option value=''{' selected' if not selected else ''}>（選んでください）</option>"
+    return placeholder + "".join(
         f"<option value='{html.escape(code)}'{' selected' if code == selected else ''}>"
         f"{html.escape(code)}</option>"
         for code in privacy_dictionary.patient_codes(dictionary)
@@ -963,7 +964,7 @@ def nippou_form() -> HTMLResponse:
       <summary>🔎 保存の前に Privacy Gate の検査を通ります</summary>
       <p class="warning-body">構造化の前に、氏名・電話番号などの直接識別子を機械的に検出して仮名化します
       （現在のモード: {html.escape(PRIVACY_CONFIG.mode)}）。仮名化後も病状・服薬などの要配慮個人情報は残るため、
-      結果画面で内容を確認してください。記録に残せない情報（保険証番号など）を検出した場合、処理は停止します。
+      結果画面で内容を確認してください。記録に残せない情報（保険証番号など）をラベル付きで検出した場合、処理は停止します（検出は規則による検査で、見つけられない言い方もあります）。
       <a href="/privacy/audits">監査記録を見る</a></p>
     </details>
 
@@ -972,7 +973,7 @@ def nippou_form() -> HTMLResponse:
       <div class="field-row">
         <div>
           <label class="field-label" for="subject-code">利用者コード</label>
-          <select id="subject-code" name="subject_code">{_patient_code_options()}</select>
+          <select id="subject-code" name="subject_code" required>{_patient_code_options()}</select>
         </div>
         <div>
           <label class="field-label" for="visited-on">訪問日</label>
@@ -1847,7 +1848,7 @@ def _monthly_form_html(subject_code: str = "", month: str = "") -> str:
     <form class="run-form" method="post" action="/monthly">
       <div>
         <label class="field-label" for="monthly-subject">利用者コード</label>
-        <select id="monthly-subject" name="subject_code">{_patient_code_options(subject_code)}</select>
+        <select id="monthly-subject" name="subject_code" required>{_patient_code_options(subject_code)}</select>
       </div>
       <div>
         <label class="field-label" for="monthly-month">対象月</label>
@@ -1880,6 +1881,8 @@ def monthly_report(subject_code: str = Form(...), month: str = Form(...)) -> HTM
     （ブラウザ履歴・アクセスログ・Referer に識別子が残るのを避ける）。
     """
     subject_code = subject_code.strip()
+    if not subject_code:
+        raise HTTPException(status_code=422, detail="利用者コードを選んでください。")
     year, month_number = _parse_month(month)
 
     subject_pseudonym = privacy_vault.stable_pseudonym(subject_code)
@@ -2013,7 +2016,7 @@ def deliveries_page() -> HTMLResponse:
             elif r["status"] == "failed":
                 chip = (
                     "<span class='chip chip-rejected'>✕ 送信失敗（試行の上限）。宛先・SMTP設定を確かめて、"
-                    "更新案を承認し直してください</span>"
+                    "更新案を却下してから承認し直してください</span>"
                 )
             elif is_pending:
                 chip = "<span class='chip chip-queued'>⏳ 送信待ち</span>"
