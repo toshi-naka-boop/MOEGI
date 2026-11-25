@@ -17,6 +17,7 @@
     MOEGI_SMTP_PASSWORD     ⚠️ ここにしか置かない。コードにもDBにもログにも出さない
     MOEGI_SMTP_FROM         差出人。既定 moegi@example.local
     MOEGI_DELIVERY_PROBE    回線復帰の検知に使うTCPプローブ。既定 1.1.1.1:53
+                            （SMTP未設定かつ未指定のときは、ファイル書き出しなので検査しない）
 
 ⚠️ **何を送ってよいか**（design/moegi/privacy.md §11 の外部送信境界）:
     積んでよいのは**承認済み更新案**だけ。チェックリスト項目のラベルと通達原文の引用で、
@@ -104,6 +105,11 @@ def is_online(config: DeliveryConfig, *, timeout: float = 2.0) -> bool:
     ここで嘘の「オンライン」を返すと、送信のたびにSMTPのタイムアウトを待つことになり、
     デモの復帰演出が固まって見える。
     """
+    if not config.smtp_host and config.probe == DEFAULT_PROBE:
+        # SMTP未設定＝data/outbox/ へのファイル書き出しで、回線を使わない。プローブ先を
+        # 利用者が明示していない限り、インターネットに出られない閉じたLANでも流す。
+        # （回線断のデモをしたいときは MOEGI_DELIVERY_PROBE に到達できない宛先を指定する）
+        return True
     target = f"{config.smtp_host}:{config.smtp_port}" if config.smtp_host else config.probe
     host, _, port = target.partition(":")
     try:

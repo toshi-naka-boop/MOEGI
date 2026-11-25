@@ -71,6 +71,10 @@ def _run_diff(args: argparse.Namespace) -> None:
             orchestrate=True,
         )
 
+    # 承認画面（Web）から辿れるよう、結果をDBにも保存する（以前はJSON出力のみで画面に出なかった）。
+    store.save_pipeline_result(conn, run_id, result)
+    conn.close()
+
     output = {
         "run_id": run_id,
         "changes": _asdict_list(result["changes"]),
@@ -82,7 +86,7 @@ def _run_diff(args: argparse.Namespace) -> None:
     Path(args.out).write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     print(
         f"更新案 {len(result['proposals'])} 件（影響判定 {len(result['impacts'])} 件 / "
-        f"差分 {len(result['changes'])} 件）を {args.out} に出力しました（run_id={run_id}）"
+        f"差分 {len(result['changes'])} 件）を {args.out} に出力し、承認画面用に {args.db} へ保存しました（run_id={run_id}）"
     )
 
 

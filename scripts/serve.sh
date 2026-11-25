@@ -7,8 +7,12 @@
 # 起動と同時に**そのとき有効なURLだけ**を印字する。
 #
 # 使い方:
-#   ./scripts/serve.sh          # HTTP（Android向け・既定）
+#   ./scripts/serve.sh          # HTTP・このPCだけ（127.0.0.1）で待ち受ける（既定）
 #   ./scripts/serve.sh https    # HTTPS（iPhoneの録音UI向け。要 certs/）
+#   MOEGI_LAN=1 MOEGI_ACCESS_TOKEN=... ./scripts/serve.sh
+#                               # 同じネットワークの端末にも公開する。パスワード
+#                               # （MOEGI_ACCESS_TOKEN）が未設定なら起動しない。
+#                               # ※ HTTPのためパスワードは暗号化されずに流れる。信頼できる閉じたLAN内だけで使うこと
 #
 # マイク（getUserMedia）について:
 #   ブラウザはマイクを **secure context** でしか許可しない。
@@ -26,21 +30,39 @@ cd "$(dirname "$0")/.."
 MODE="${1:-http}"
 PORT="${MOEGI_PORT:-8420}"
 
-IFACE="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' || true)"
-IP=""
-if [ -n "${IFACE}" ]; then
-  IP="$(ipconfig getifaddr "${IFACE}" 2>/dev/null || true)"
+HOST="127.0.0.1"
+if [ "${MOEGI_LAN:-}" = "1" ]; then
+  if [ -z "${MOEGI_ACCESS_TOKEN:-}" ]; then
+    echo "エラー: LAN公開（MOEGI_LAN=1）には、パスワードとして MOEGI_ACCESS_TOKEN の設定が必要です。" >&2
+    echo "        認証なしで同じネットワークの誰にでも承認・閲覧・入力を許すことになるため、起動しません。" >&2
+    exit 1
+  fi
+  HOST="0.0.0.0"
 fi
-LOCAL_HOST="$(scutil --get LocalHostName 2>/dev/null || echo moegi).local"
 
-if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+# 同一ネットワーク用のIP表示（macOSのコマンド。取れない環境では表示を省くだけで、起動には影響しない）
+IFACE=""
+IP=""
+LOCAL_HOST="moegi.local"
+if [ "${HOST}" = "0.0.0.0" ]; then
+  IFACE="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' || true)"
+  if [ -n "${IFACE}" ]; then
+    IP="$(ipconfig getifaddr "${IFACE}" 2>/dev/null || true)"
+  fi
+  if [ -z "${IP}" ]; then
+    IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  fi
+  LOCAL_HOST="$(scutil --get LocalHostName 2>/dev/null || echo moegi).local"
+fi
+
+if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "⚠️  ポート ${PORT} は既に使われています。古いサーバーが残っていませんか:"
   lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN | tail -n +2
   echo "   停止する場合: lsof -ti:${PORT} | xargs kill"
   exit 1
 fi
 
-ARGS=(moegi.webapp:app --app-dir src --host 0.0.0.0 --port "${PORT}")
+ARGS=(moegi.webapp:app --app-dir src --host "${HOST}" --port "${PORT}")
 SCHEME="http"
 
 if [ "${MODE}" = "https" ]; then
@@ -55,7 +77,7 @@ fi
 echo "────────────────────────────────────────────────────────"
 echo " MOEGI 承認UI（${SCHEME}） ポート ${PORT}"
 echo "────────────────────────────────────────────────────────"
-echo " このMac      : ${SCHEME}://localhost:${PORT}/"
+echo " このPC        : ${SCHEME}://localhost:${PORT}/"
 if [ -n "${IP}" ]; then
   echo " 同一ネットワーク: ${SCHEME}://${IP}:${PORT}/"
 fi
@@ -67,10 +89,15 @@ if [ "${SCHEME}" = "https" ]; then
     echo "     IPで繋ぐなら ./scripts/reissue_cert.sh を1回実行してください。"
   fi
 else
-  echo " Android      : 上の「同一ネットワーク」URLをそのまま開く（証明書もCAも不要）"
+  if [ "${HOST}" = "0.0.0.0" ]; then
+    echo " Android      : 上の「同一ネットワーク」URLをそのまま開く（証明書もCAも不要）"
+  fi
   echo "                ※ 録音UIだけはマイクの都合でHTTPでは動きません。"
   echo "                   録音を実機で試すなら Chrome の Port forwarding で"
   echo "                   http://localhost:${PORT}/nippou を使ってください。"
+fi
+if [ "${HOST}" = "127.0.0.1" ]; then
+  echo " ※ このPCだけで待ち受けています。他の端末から開く場合は MOEGI_LAN=1 と MOEGI_ACCESS_TOKEN を指定してください。"
 fi
 echo "────────────────────────────────────────────────────────"
 

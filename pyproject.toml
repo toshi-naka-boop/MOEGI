@@ -22,7 +22,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest==9.1.1"]
+dev = ["pytest==9.1.1", "ruff==0.17.6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# 未使用の import・未定義名・構文エラーなど「確実に不具合につながるもの」だけを見る最小構成
+select = ["F", "E9"]

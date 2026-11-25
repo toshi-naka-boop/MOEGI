@@ -389,6 +389,56 @@ def list_reviewed_precedents_for_item(
     return [{"status": row[0], "change_summary": row[1]} for row in rows]
 
 
+def get_proposal_run_id(conn: sqlite3.Connection, proposal_row_id: int) -> str | None:
+    """更新案の所属 run_id。存在しない更新案なら None（呼び出し側が404にする）。"""
+    row = conn.execute("SELECT run_id FROM proposals WHERE row_id = ?", (proposal_row_id,)).fetchone()
+    return row[0] if row else None
+
+
+def run_exists(conn: sqlite3.Connection, run_id: str) -> bool:
+    return (
+        conn.execute("SELECT 1 FROM proposals WHERE run_id = ? LIMIT 1", (run_id,)).fetchone()
+        is not None
+    )
+
+
+def list_applied_proposals(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """承認・編集済の更新案を、全 run 分まとめて古い順に返す（日報入力のチェックリスト改定用）。
+
+    同じ項目への更新案が複数あるときは、新しい（row_idが大きい）ものが後から適用される。
+    """
+    rows = conn.execute(
+        _PROPOSAL_REVIEW_QUERY.replace(
+            "WHERE proposals.run_id = ?", "WHERE proposals.status IN ('承認', '編集済')"
+        )
+    ).fetchall()
+    return [dict(zip(_PROPOSAL_COLUMNS, row)) for row in rows]
+
+
+def cancel_pending_deliveries_for_proposal(conn: sqlite3.Connection, proposal_row_id: int) -> int:
+    """更新案が却下・再編集されたとき、その更新案を含む「送信待ち」を取り消す。
+
+    送信済みのものは取り消せない（取り消すと嘘の履歴になる）ので触らない。
+    戻り値は取り消した件数。
+    """
+    cancelled = 0
+    for row in conn.execute(
+        "SELECT row_id, proposal_row_ids FROM delivery_queue WHERE status = 'pending'"
+    ).fetchall():
+        if proposal_row_id in json.loads(row[1]):
+            conn.execute("UPDATE delivery_queue SET status = 'cancelled' WHERE row_id = ?", (row[0],))
+            cancelled += 1
+    conn.commit()
+    return cancelled
+
+
+def has_sent_delivery_for_proposal(conn: sqlite3.Connection, proposal_row_id: int) -> bool:
+    for (ids,) in conn.execute("SELECT proposal_row_ids FROM delivery_queue WHERE status = 'sent'"):
+        if proposal_row_id in json.loads(ids):
+            return True
+    return False
+
+
 def update_proposal_status(
     conn: sqlite3.Connection, proposal_row_id: int, status: str, after: str | None = None
 ) -> None:

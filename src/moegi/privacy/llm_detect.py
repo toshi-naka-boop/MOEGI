@@ -16,7 +16,7 @@ LLMDetectionResult.ok=False として呼び出し側（gate.py）へ返す。
 
 from __future__ import annotations
 
-import json
+from moegi.jsonutil import extract_json_payload as _extract_json_object
 from dataclasses import dataclass, field
 
 STAGE = "pseudonymize"
@@ -99,39 +99,6 @@ class LLMDetectionResult:
     error_code: str | None = None
 
 
-def _extract_json_object(text: str) -> dict | None:
-    """LLM出力から最初の完結したJSONオブジェクトを取り出す（nippou.py と同じ走査）。"""
-    start = text.find("{")
-    while start != -1:
-        depth = 0
-        in_string = False
-        escaped = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    in_string = False
-                continue
-            if ch == '"':
-                in_string = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        data = json.loads(text[start : i + 1])
-                    except json.JSONDecodeError:
-                        break
-                    return data if isinstance(data, dict) else None
-        start = text.find("{", start + 1)
-    return None
-
-
 def _validate(payload: dict) -> str | None:
     """OUTPUT_SCHEMA に対する最小限の検証。違反していれば理由コードを返す。
 
@@ -175,6 +142,9 @@ def detect(text: str, adapter) -> LLMDetectionResult:
         # 混ざる可能性を構造的に消すため。§10 ログ漏えい防止）。
         return LLMDetectionResult(ok=False, sanitized_text=text, error_code="llm_unavailable")
 
+    if result.get("unavailable"):
+        # Ollama停止・接続拒否・応答が読めない。timeoutとは原因も次の行動も違うので分ける。
+        return LLMDetectionResult(ok=False, sanitized_text=text, error_code="llm_unavailable")
     if result.get("timeout"):
         return LLMDetectionResult(ok=False, sanitized_text=text, error_code="llm_timeout")
 

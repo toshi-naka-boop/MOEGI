@@ -11,8 +11,8 @@
 # ローカル固定が必要なのは要配慮個人情報（患者の医療・看護情報）を扱う工程だけ
 # （§6.1「ルーティングの第一原則」v13）。SiteDoc/ChecklistItemは項目ラベルの
 # テンプレート定義であり患者データを含まないため、matching/draftも他の工程と同じく
-# クラウドが既定。ローカル固定が必要なのは日報エージェント（transcribe/structure・
-# 未実装）だけで、そちらはこのモデル設定を経由しない別系統になる予定（ledger N-11）。
+# クラウドが既定。日報エージェント（nippou・privacy_detect）は実装済みで、
+# 患者データを扱うため常にローカル（Ollama）で実行される（llm.py の LOCAL_ONLY_STAGES）。
 dev_local_only = false
 
 # design.md §7「投入単位と突合のバッチ化」(v11)。

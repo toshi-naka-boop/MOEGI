@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import unittest
-from pathlib import Path
 
 from moegi import nippou
 from moegi.pipeline import ChecklistItem

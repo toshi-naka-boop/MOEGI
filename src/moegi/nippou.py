@@ -32,11 +32,11 @@ structure() に渡し、NippouRecord.procedures にLLMを経由せず格納す�
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from moegi.llm import LLMAdapter
+from moegi.jsonutil import extract_json_payload as _extract_json_payload
 from moegi.pipeline import ChecklistItem
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -82,6 +82,9 @@ class NippouRecord:
     items: list[NippouItem] = field(default_factory=list)
     evaluation: Evaluation | None = None
     procedures: list[str] = field(default_factory=list)
+    #: ローカルLLMのtimeout・接続失敗で構造化できなかった。全項目が未記入に見えるが、
+    #: 「記入が無かった」のではなく「判定できなかった」ので、保存してはいけない。
+    undecidable: bool = False
 
 
 @dataclass
@@ -168,39 +171,6 @@ def _format_checklist_block(items: list[ChecklistItem]) -> str:
     return "\n".join(f"{i}. {item.label}（種別: {item.kind}）" for i, item in enumerate(items, start=1))
 
 
-def _extract_json_payload(text: str) -> dict | None:
-    """LLM出力から最初の完結したJSONオブジェクトを取り出す（pipeline.pyと同じロジック）。"""
-    start = text.find("{")
-    while start != -1:
-        depth = 0
-        in_string = False
-        escaped = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    in_string = False
-                continue
-            if ch == '"':
-                in_string = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        data = json.loads(text[start : i + 1])
-                    except json.JSONDecodeError:
-                        break
-                    return data if isinstance(data, dict) else None
-        start = text.find("{", start + 1)
-    return None
-
-
 class NippouAgent:
     """design.md §6.5 の契約を満たす日報エージェント本体（最小再実装・ledger R-52/R-53）。"""
 
@@ -284,6 +254,7 @@ class NippouAgent:
                 items=items,
                 evaluation=evaluation,
                 procedures=procedures,
+                undecidable=True,
             )
 
         payload = _extract_json_payload(result["text"]) or {}

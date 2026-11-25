@@ -267,6 +267,9 @@ class LLMAdapter:
         self._breaker_open_until: float | None = None
         # timeout算出用のEMA（プロセス内の実測値）
         self._cloud_latency_ema_seconds = CLOUD_LATENCY_SEED_SECONDS
+        #: ローカルLLMへ接続できなかった（または応答が読めなかった）回数。
+        #: 呼び出し側（Web画面）が「AIに接続できない」と案内するために読む。
+        self.local_unavailable_count = 0
 
     def close(self) -> None:
         if self._owns_client:
@@ -434,9 +437,14 @@ class LLMAdapter:
             1 - _LATENCY_EMA_ALPHA
         ) * self._cloud_latency_ema_seconds + _LATENCY_EMA_ALPHA * (latency_ms / 1000)
 
-        data = response.json()
-        text = data["choices"][0]["message"]["content"]
-        usage = _extract_usage(data)
+        try:
+            data = response.json()
+            text = data["choices"][0]["message"]["content"]
+            usage = _extract_usage(data)
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            # 200なのに本文の形が想定外。HTTPErrorとして扱い、呼び出し元の
+            # フォールバック（別プロバイダ→ローカル）に乗せる。
+            raise httpx.DecodingError("ORCAの応答の形式が想定外です") from exc
 
         # design.md §6.1: レスポンスヘッダを全呼び出しで必ず記録する
         resolved_model = response.headers.get("X-Orca-Resolved-Model", model)
@@ -487,11 +495,13 @@ class LLMAdapter:
                 timeout=local_timeout,
             )
             response.raise_for_status()
-        except httpx.TimeoutException:
+        except httpx.HTTPError as exc:
             # design.md §6.6（v10）: ローカルはフォールバック先が無い。例外を上げると
             # パイプラインごと落ちるため、timeout=Trueを付けて返す。呼び出し元が
             # 当該項目を「判定不能」として記録し、パイプラインを続行させる。
             latency_ms = (time.monotonic() - start) * 1000
+            if not isinstance(exc, httpx.TimeoutException):
+                self.local_unavailable_count += 1
             return {
                 "text": "",
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0},
@@ -499,6 +509,9 @@ class LLMAdapter:
                 "backend": f"local:{model}",
                 "degraded": True,
                 "timeout": True,
+                # 接続拒否・HTTPエラー（Ollama停止など）はtimeoutと同じく「判定不能」で返す。
+                # unavailable=True なら呼び出し元は「AIに接続できない」と案内できる。
+                "unavailable": not isinstance(exc, httpx.TimeoutException),
                 "guardrail_blocked": False,
                 "latency_ms": latency_ms,
                 "resolved_model": model,
@@ -506,9 +519,25 @@ class LLMAdapter:
             }
         latency_ms = (time.monotonic() - start) * 1000
 
-        data = response.json()
-        text = data["choices"][0]["message"]["content"]
-        usage = _extract_usage(data)
+        try:
+            data = response.json()
+            text = data["choices"][0]["message"]["content"] or ""
+            usage = _extract_usage(data)
+        except (KeyError, IndexError, TypeError, ValueError):
+            self.local_unavailable_count += 1
+            return {
+                "text": "",
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+                "cost_jpy": 0.0,
+                "backend": f"local:{model}",
+                "degraded": True,
+                "timeout": True,
+                "unavailable": True,
+                "guardrail_blocked": False,
+                "latency_ms": latency_ms,
+                "resolved_model": model,
+                "fallback_level": fallback_level,
+            }
 
         return {
             "text": text,
